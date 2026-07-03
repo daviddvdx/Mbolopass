@@ -1,0 +1,15 @@
+.idea/
+.vscode/
+node_modules/
+dist/
+target/
+.env
+.env.*
+!.env.example
+application-local.properties
+backend/src/main/resources/application-local.properties
+*.log
+*.tsbuildinfo
+frontend/.env.local
+frontend/.env.*.local
+backend/storage/

@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: mbolopass-postgres
+    environment:
+      POSTGRES_DB: mbolopass
+      POSTGRES_USER: mbolopass_app
+      POSTGRES_PASSWORD: CHANGE_ME_DEV_ONLY
+    ports:
+      - "5432:5432"
+    volumes:
+      - mbolopass-postgres:/var/lib/postgresql/data
+
+volumes:
+  mbolopass-postgres:
