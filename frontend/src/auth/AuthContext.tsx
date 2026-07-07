@@ -2,11 +2,12 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { logout as logoutRequest } from '../api/auth.api';
 import { setApiAuthToken, UNAUTHORIZED_EVENT } from '../api/client';
 import type { Role, User } from '../types';
 import { clearLegacyAuthStorage } from './legacyAuthStorage';
 
-type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
+type AuthStatus = 'loading' | 'authenticated' | 'anonymous';
 
 type AuthContextType = {
   status: AuthStatus;
@@ -18,19 +19,19 @@ type AuthContextType = {
   sessionMessage: string | null;
   hasRole: (role: Role | `ROLE_${Role}`) => boolean;
   login: (token: string, user: User) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   setSession: (token: string, user: User) => void;
-  clearSession: () => void;
+  clearSession: () => Promise<void>;
   consumeSessionMessage: () => void;
   setUser: (user: User | null) => void;
 };
 
-const VALID_ROLES: Role[] = ['PATIENT', 'PROFESSIONAL', 'ADMIN'];
+const VALID_ROLES: Role[] = ['PATIENT', 'HEALTH_PROFESSIONAL', 'HEALTH_ADMIN'];
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 function authority(role: Role | `ROLE_${Role}`): `ROLE_${Role}` {
-  if (role === 'ADMIN' || role === 'ROLE_ADMIN') return 'ROLE_ADMIN';
-  if (role === 'PROFESSIONAL' || role === 'ROLE_PROFESSIONAL') return 'ROLE_PROFESSIONAL';
+  if (role === 'HEALTH_ADMIN' || role === 'ROLE_HEALTH_ADMIN') return 'ROLE_HEALTH_ADMIN';
+  if (role === 'HEALTH_PROFESSIONAL' || role === 'ROLE_HEALTH_PROFESSIONAL') return 'ROLE_HEALTH_PROFESSIONAL';
   return 'ROLE_PATIENT';
 }
 
@@ -38,7 +39,7 @@ function normalizeUser(user: User): User | null {
   if (!VALID_ROLES.includes(user.role)) return null;
   const roles = Array.from(new Set([...(user.roles ?? []), authority(user.role)]));
   const allowedAuthorities = roles.filter((role): role is `ROLE_${Role}` =>
-    role === 'ROLE_PATIENT' || role === 'ROLE_PROFESSIONAL' || role === 'ROLE_ADMIN',
+    role === 'ROLE_PATIENT' || role === 'ROLE_HEALTH_PROFESSIONAL' || role === 'ROLE_HEALTH_ADMIN',
   );
   if (!allowedAuthorities.includes(authority(user.role))) return null;
   return { ...user, roles: allowedAuthorities };
@@ -51,11 +52,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null);
   const [sessionMessage, setSessionMessage] = useState<string | null>(null);
 
-  const clearSessionState = useCallback(() => {
+  const clearSessionState = useCallback(async () => {
+    await queryClient.cancelQueries();
     setApiAuthToken(null);
     setToken(null);
     setUserState(null);
-    setStatus('unauthenticated');
+    setStatus('anonymous');
     queryClient.clear();
     clearLegacyAuthStorage();
   }, [queryClient]);
@@ -68,7 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setApiAuthToken(null);
       setToken(null);
       setUserState(null);
-      setStatus('unauthenticated');
+      setStatus('anonymous');
       setSessionMessage('Role utilisateur invalide. Contactez un administrateur.');
       return;
     }
@@ -83,12 +85,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUserState(nextUser ? normalizeUser(nextUser) : null);
   }, []);
 
-  const logout = useCallback(() => {
-    clearSessionState();
-  }, [clearSessionState]);
+  const logout = useCallback(async () => {
+    const currentToken = token;
+    try {
+      if (currentToken) await logoutRequest(currentToken);
+    } catch {
+      // Local cleanup is mandatory even if the token was already invalid server-side.
+    } finally {
+      await clearSessionState();
+    }
+  }, [clearSessionState, token]);
 
   const expireSession = useCallback(() => {
-    clearSessionState();
+    void clearSessionState();
     setSessionMessage('Votre session a expire. Veuillez vous reconnecter.');
   }, [clearSessionState]);
 
@@ -96,7 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     clearLegacyAuthStorage();
-    setStatus('unauthenticated');
+    setStatus('anonymous');
   }, []);
 
   useEffect(() => {
@@ -114,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     token,
     user,
     isAuthenticated: status === 'authenticated' && Boolean(token && user),
-    isAdmin: hasRole('ADMIN'),
+    isAdmin: hasRole('HEALTH_ADMIN'),
     isPatient: hasRole('PATIENT'),
     sessionMessage,
     hasRole,

@@ -48,7 +48,7 @@ class SecurityAuthorizationTest {
                 "lastName", "Attempt",
                 "email", email(),
                 "password", "Password123!",
-                "role", "ADMIN"))))
+                "role", "HEALTH_ADMIN"))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.user.role").value("PATIENT"))
         .andReturn();

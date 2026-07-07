@@ -20,8 +20,13 @@ const loginSchema = z.object({
 type FormValues = z.infer<typeof loginSchema>;
 
 function destinationFor(user: User, requestedPath?: string) {
-  if (user.roles.includes('ROLE_ADMIN')) {
+  if (user.roles.includes('ROLE_HEALTH_ADMIN')) {
     return requestedPath?.startsWith('/admin') ? requestedPath : '/admin';
+  }
+  if (user.roles.includes('ROLE_HEALTH_PROFESSIONAL')) {
+    if (user.professionalProfile?.verificationStatus === 'PENDING') return '/professional/pending-verification';
+    if (user.professionalProfile?.verificationStatus !== 'APPROVED') return '/professional/access-restricted';
+    return requestedPath?.startsWith('/professional') ? requestedPath : '/professional';
   }
   if (user.roles.includes('ROLE_PATIENT')) {
     return requestedPath && !requestedPath.startsWith('/admin') && requestedPath !== '/non-autorise'

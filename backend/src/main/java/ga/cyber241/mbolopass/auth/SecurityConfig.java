@@ -38,12 +38,17 @@ public class SecurityConfig {
             .accessDeniedHandler((request, response, exception) -> response.sendError(HttpServletResponse.SC_FORBIDDEN)))
         .authorizeHttpRequests(auth -> auth
             .requestMatchers("/actuator/health").permitAll()
-            .requestMatchers("/api/v1/auth/**").permitAll()
+            .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register", "/api/v1/auth/register-professional").permitAll()
+            .requestMatchers("/api/v1/auth/me", "/api/v1/auth/logout").authenticated()
             .requestMatchers("/api/v1/public/**").permitAll()
-            .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+            .requestMatchers("/api/v1/admin/**").hasRole("HEALTH_ADMIN")
+            .requestMatchers("/api/v1/professional/**").hasRole("HEALTH_PROFESSIONAL")
+            .requestMatchers("/api/v1/health-professionals/**").hasRole("HEALTH_PROFESSIONAL")
+            .requestMatchers("/api/v1/patient/**").hasRole("PATIENT")
             .requestMatchers(HttpMethod.GET, "/api/v1/profile/me").authenticated()
             .requestMatchers("/api/v1/health-profile/**").hasRole("PATIENT")
             .requestMatchers("/api/v1/card/**").hasRole("PATIENT")
+            .requestMatchers("/api/v1/cards/**").hasRole("PATIENT")
             .requestMatchers("/api/v1/prevention/**").hasRole("PATIENT")
             .requestMatchers("/api/v1/ai-summary/**").hasRole("PATIENT")
             .requestMatchers("/api/v1/dependents/**").hasRole("PATIENT")
@@ -60,7 +65,7 @@ public class SecurityConfig {
       return org.springframework.security.core.userdetails.User
           .withUsername(user.getEmail())
           .password(user.getPasswordHash())
-          .authorities("ROLE_" + user.getRole().name())
+          .authorities(JwtService.authority(user.getRole()))
           .disabled(!user.isEnabled())
           .build();
     };

@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import static org.assertj.core.api.Assertions.assertThat;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,12 @@ class HealthProfileControllerTest {
   void patientCanUpdateAndReadOwnMinimalProfile() throws Exception {
     String bearer = bearer(register(email(), "Amina", "N."));
 
+    MvcResult before = mockMvc.perform(get("/api/v1/health-profile/me").header("Authorization", bearer))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.cardNumber").exists())
+        .andReturn();
+    String cardNumber = objectMapper.readTree(before.getResponse().getContentAsString()).get("cardNumber").asText();
+
     mockMvc.perform(put("/api/v1/health-profile/me")
             .header("Authorization", bearer)
             .contentType(MediaType.APPLICATION_JSON)
@@ -45,7 +52,8 @@ class HealthProfileControllerTest {
                 "emergencyNotes", "Profil de demonstration uniquement",
                 "lastMedicalVisitDate", "2026-01-15"))))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.bloodType").value("O+"));
+        .andExpect(jsonPath("$.bloodType").value("O+"))
+        .andExpect(jsonPath("$.cardNumber").value(cardNumber));
 
     mockMvc.perform(get("/api/v1/health-profile/me").header("Authorization", bearer))
         .andExpect(status().isOk())
@@ -68,6 +76,99 @@ class HealthProfileControllerTest {
     String itemId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
     mockMvc.perform(delete("/api/v1/health-profile/me/allergies/" + itemId).header("Authorization", other))
         .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void patientCanAddAllergyAndConditionAndReadOnlyOwnItems() throws Exception {
+    String owner = bearer(register(email(), "Patient", "One"));
+    String other = bearer(register(email(), "Patient", "Two"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/allergies")
+            .header("Authorization", owner)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "  Penicilline  ", "level", "HIGH", "critical", true))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.label").value("Penicilline"))
+        .andExpect(jsonPath("$.level").value("HIGH"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/conditions")
+            .header("Authorization", owner)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "Asthme", "level", "ACTIVE", "critical", false))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.label").value("Asthme"))
+        .andExpect(jsonPath("$.level").value("ACTIVE"));
+
+    mockMvc.perform(get("/api/v1/health-profile/me/allergies").header("Authorization", owner))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].label").value("Penicilline"));
+
+    mockMvc.perform(get("/api/v1/health-profile/me/conditions").header("Authorization", owner))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].label").value("Asthme"));
+
+    mockMvc.perform(get("/api/v1/health-profile/me/allergies").header("Authorization", other))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(0));
+  }
+
+  @Test
+  void healthItemValidationRejectsInvalidValuesAndDuplicates() throws Exception {
+    String bearer = bearer(register(email(), "Patient", "Validation"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/allergies")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "Pollen", "level", "EXTREME"))))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("Severite d'allergie invalide"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/conditions")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "Asthme", "level", "CURRENT"))))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.message").value("Statut de condition invalide"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/allergies")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "   ", "level", "LOW"))))
+        .andExpect(status().isBadRequest());
+
+    mockMvc.perform(post("/api/v1/health-profile/me/allergies")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "Latex", "level", "MEDIUM"))))
+        .andExpect(status().isOk());
+
+    mockMvc.perform(post("/api/v1/health-profile/me/allergies")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", " latex ", "level", "MEDIUM"))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.message").value("Cette allergie existe deja"));
+  }
+
+  @Test
+  void healthItemsArePersistedInDatabase() throws Exception {
+    String bearer = bearer(register(email(), "Patient", "Persisted"));
+
+    mockMvc.perform(post("/api/v1/health-profile/me/conditions")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("label", "Hypertension", "level", "HISTORICAL"))))
+        .andExpect(status().isOk());
+
+    MvcResult listed = mockMvc.perform(get("/api/v1/health-profile/me/conditions").header("Authorization", bearer))
+        .andExpect(status().isOk())
+        .andReturn();
+
+    JsonNode body = objectMapper.readTree(listed.getResponse().getContentAsString());
+    assertThat(body).hasSize(1);
+    assertThat(body.get(0).get("label").asText()).isEqualTo("Hypertension");
   }
 
   private JsonNode register(String email, String firstName, String lastName) throws Exception {

@@ -2,15 +2,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Camera, FileText, HeartPulse, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { addItem, deleteItem, deleteProfilePhoto, fetchProfilePhoto, getProfile, getUserProfile, listItems, updateProfile, updateUserProfile, uploadProfilePhoto } from '../api/profile.api';
+import { approvePatientAccess, listPatientAccessRequests, revokePatientAccess } from '../api/clinical.api';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, Button, Card, EmptyState, Input, LoadingState, Select, Textarea } from '../components/ui';
 import type { HealthItemType, ItemRequest, ProfileRequest, UserProfileRequest } from '../types';
 
 const itemSections: Array<{ type: HealthItemType; title: string; levelLabel: string; defaultLevel?: string; showPhone?: boolean; showCritical?: boolean; placeholder: string }> = [
-  { type: 'allergies', title: 'Allergies', levelLabel: 'Severite', defaultLevel: 'HIGH', placeholder: 'Information a renseigner' },
-  { type: 'conditions', title: 'Conditions', levelLabel: 'Statut', defaultLevel: 'ACTIVE', placeholder: 'Information a renseigner' },
+  { type: 'allergies', title: 'Allergies', levelLabel: 'Severite', defaultLevel: 'HIGH', placeholder: 'Ex. Penicilline, arachides, latex' },
+  { type: 'conditions', title: 'Maladies et antecedents', levelLabel: 'Statut', defaultLevel: 'ACTIVE', placeholder: 'Ex. Asthme, diabete, hypertension' },
   { type: 'medications', title: 'Medicaments', levelLabel: 'Critique', showCritical: true, placeholder: 'Information a renseigner' },
-  { type: 'emergency-contacts', title: 'Contact d’urgence', levelLabel: 'Relation', showPhone: true, showCritical: true, placeholder: 'Contact principal' }
+  { type: 'emergency-contacts', title: 'Contacts urgence', levelLabel: 'Relation', showPhone: true, showCritical: true, placeholder: 'Nom du contact urgence' }
 ];
 
 export function ProfilePage() {
@@ -28,6 +29,7 @@ export function ProfilePage() {
   }, [activeTab]);
   const userProfile = useQuery({ queryKey: ['user-profile'], queryFn: () => getUserProfile(token!), enabled });
   const profile = useQuery({ queryKey: ['profile'], queryFn: () => getProfile(token!), enabled });
+  const patientAccesses = useQuery({ queryKey: ['patient-access-requests'], queryFn: listPatientAccessRequests, enabled });
   const items = useQuery({
     queryKey: ['profile-items', activeTab],
     enabled: enabled && visibleItemSections.length > 0,
@@ -45,6 +47,8 @@ export function ProfilePage() {
   });
   const add = useMutation({ mutationFn: ({ type, payload }: { type: HealthItemType; payload: ItemRequest }) => addItem(token!, type, payload), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['profile-items'] }) });
   const remove = useMutation({ mutationFn: ({ type, id }: { type: HealthItemType; id: string }) => deleteItem(token!, type, id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['profile-items'] }) });
+  const approveAccess = useMutation({ mutationFn: (id: string) => approvePatientAccess(id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['patient-access-requests'] }) });
+  const revokeAccess = useMutation({ mutationFn: (id: string) => revokePatientAccess(id), onSuccess: () => queryClient.invalidateQueries({ queryKey: ['patient-access-requests'] }) });
   const uploadPhoto = useMutation({ mutationFn: (file: File) => uploadProfilePhoto(token!, file), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['user-profile'] }); reloadPhoto(true); } });
   const removePhoto = useMutation({ mutationFn: () => deleteProfilePhoto(token!), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['user-profile'] }); if (photoUrl) URL.revokeObjectURL(photoUrl); setPhotoUrl(null); } });
 
@@ -54,6 +58,7 @@ export function ProfilePage() {
     firstName: identityDraft.firstName ?? currentIdentity?.firstName ?? '',
     lastName: identityDraft.lastName ?? currentIdentity?.lastName ?? '',
     email: currentIdentity?.email ?? '',
+    phone: identityDraft.phone ?? currentIdentity?.phone ?? '',
     birthDate: identityDraft.birthDate ?? currentIdentity?.birthDate ?? '',
     gender: identityDraft.gender ?? currentIdentity?.gender ?? ''
   }), [currentIdentity, identityDraft]);
@@ -114,6 +119,8 @@ export function ProfilePage() {
           <label>Prenom<Input value={identityValues.firstName} onChange={(event) => setIdentityDraft((value) => ({ ...value, firstName: event.target.value }))} /></label>
           <label>Nom<Input value={identityValues.lastName} onChange={(event) => setIdentityDraft((value) => ({ ...value, lastName: event.target.value }))} /></label>
           <label>Email<Input value={identityValues.email} disabled /></label>
+          <label>Telephone<Input value={identityValues.phone} onChange={(event) => setIdentityDraft((value) => ({ ...value, phone: event.target.value }))} placeholder="+241 06 00 00 00" /></label>
+          <label>Numero de carte<Input value={currentIdentity?.cardNumber ?? 'Initialisation en cours'} disabled /></label>
           <label>Date de naissance<Input type="date" value={identityValues.birthDate} onChange={(event) => setIdentityDraft((value) => ({ ...value, birthDate: event.target.value }))} /></label>
           <label>Genre<Input value={identityValues.gender} onChange={(event) => setIdentityDraft((value) => ({ ...value, gender: event.target.value }))} placeholder="Optionnel" /></label>
           <Button type="submit" disabled={saveIdentity.isPending}>Enregistrer l'identite</Button>
@@ -125,6 +132,10 @@ export function ProfilePage() {
         <button type="button" className={activeTab === 'documents' ? 'active' : ''} onClick={() => setActiveTab('documents')}><FileText size={16} /> Documents medicaux</button>
       </div>
       <Card>
+        <div className="section-title"><h2>Acces professionnels</h2><Badge tone="blue">Controle patient</Badge></div>
+        {patientAccesses.data?.length ? <ul className="item-list">{patientAccesses.data.map((access) => <li key={access.id}><span><strong>{access.professionalName}</strong> - {access.status}{access.reason ? ` - ${access.reason}` : ''}</span><span className="actions compact-actions">{access.status === 'PENDING' ? <Button type="button" className="small" onClick={() => approveAccess.mutate(access.id)} disabled={approveAccess.isPending}>Accepter</Button> : null}{access.status === 'ACTIVE' ? <Button type="button" className="ghost small" onClick={() => revokeAccess.mutate(access.id)} disabled={revokeAccess.isPending}>Revoquer</Button> : null}</span></li>)}</ul> : <EmptyState title="Aucune demande" text="Les demandes d'acces des professionnels apparaitront ici." />}
+      </Card>
+      <Card>
         <form className="profile-form" onSubmit={(event) => { event.preventDefault(); saveProfile.mutate(cleanProfile(formValues)); }}>
           <label>Date de naissance<Input type="date" value={formValues.birthDate} onChange={(event) => setDraft((value) => ({ ...value, birthDate: event.target.value }))} /></label>
           <label>Genre<Input value={formValues.gender} onChange={(event) => setDraft((value) => ({ ...value, gender: event.target.value }))} placeholder="Optionnel" /></label>
@@ -135,56 +146,83 @@ export function ProfilePage() {
         </form>
       </Card>
       {activeTab === 'health' ? <div className="profile-sections">
-        {itemSections.filter((section) => section.type !== 'emergency-contacts').map((section) => <ItemSection key={section.type} section={section} items={items.data?.[section.type] ?? []} onAdd={(payload) => add.mutate({ type: section.type, payload })} onDelete={(id) => remove.mutate({ type: section.type, id })} />)}
+        {itemSections.filter((section) => section.type !== 'emergency-contacts').map((section) => <ItemSection key={section.type} section={section} items={items.data?.[section.type] ?? []} isAdding={add.isPending && add.variables?.type === section.type} isDeleting={remove.isPending && remove.variables?.type === section.type} onAdd={(payload) => add.mutateAsync({ type: section.type, payload }).then(() => undefined)} onDelete={(id) => remove.mutateAsync({ type: section.type, id }).then(() => undefined)} />)}
       </div> : null}
       {activeTab === 'emergency' ? <div className="profile-sections">
-        {itemSections.filter((section) => section.type === 'emergency-contacts').map((section) => <ItemSection key={section.type} section={section} items={items.data?.[section.type] ?? []} onAdd={(payload) => add.mutate({ type: section.type, payload })} onDelete={(id) => remove.mutate({ type: section.type, id })} />)}
+        {itemSections.filter((section) => section.type === 'emergency-contacts').map((section) => <ItemSection key={section.type} section={section} items={items.data?.[section.type] ?? []} isAdding={add.isPending && add.variables?.type === section.type} isDeleting={remove.isPending && remove.variables?.type === section.type} onAdd={(payload) => add.mutateAsync({ type: section.type, payload }).then(() => undefined)} onDelete={(id) => remove.mutateAsync({ type: section.type, id }).then(() => undefined)} />)}
       </div> : null}
       {activeTab === 'documents' ? <Card><h2>Ordonnances et documents medicaux</h2><p>Les documents sont geres dans la page dediee et ne sont jamais exposes via le QR public.</p><Button type="button" onClick={() => window.location.assign('/documents')}>Ouvrir mes documents</Button></Card> : null}
     </div>
   );
 }
 
-function ItemSection({ section, items, onAdd, onDelete }: { section: (typeof itemSections)[number]; items: Awaited<ReturnType<typeof listItems>>; onAdd: (payload: ItemRequest) => void; onDelete: (id: string) => void }) {
+function ItemSection({ section, items, isAdding, isDeleting, onAdd, onDelete }: { section: (typeof itemSections)[number]; items: Awaited<ReturnType<typeof listItems>>; isAdding: boolean; isDeleting: boolean; onAdd: (payload: ItemRequest) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [label, setLabel] = useState('');
   const [level, setLevel] = useState(section.defaultLevel ?? '');
   const [phone, setPhone] = useState('');
   const [critical, setCritical] = useState(Boolean(section.showCritical));
+  const [error, setError] = useState<string | null>(null);
 
-  function submit() {
+  async function submit() {
     if (!label.trim()) return;
-    onAdd({ label: label.trim(), level: level || null, phone: phone || null, critical });
-    setLabel('');
-    setPhone('');
+    if (section.type === 'emergency-contacts' && !phone.trim()) {
+      setError("Le numero de telephone d'urgence est obligatoire.");
+      return;
+    }
+    setError(null);
+    try {
+      await onAdd({ label: label.trim(), level: level.trim() || null, phone: phone.trim() || null, critical });
+      setLabel('');
+      if (section.type === 'emergency-contacts') setLevel('');
+      setPhone('');
+    } catch (caught) {
+      setError(errorMessage(caught, "Impossible d'ajouter cet element."));
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setError(null);
+    try {
+      await onDelete(id);
+    } catch (caught) {
+      setError(errorMessage(caught, "Impossible de supprimer cet element."));
+    }
   }
 
   return (
     <Card>
       <div className="section-title"><h2>{section.title}</h2><Badge tone="blue">Backend</Badge></div>
+      {section.type === 'emergency-contacts' ? <p className="muted">Ajoutez les numeros que les secours pourront appeler depuis le QR d'urgence hors ligne.</p> : null}
       <div className="inline-form">
-        <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder={section.placeholder} />
+        <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder={section.placeholder} aria-label={section.type === 'emergency-contacts' ? "Nom du contact d'urgence" : section.placeholder} />
         {section.type === 'allergies' ? <Select value={level} onChange={(event) => setLevel(event.target.value)}><option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option><option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option></Select> : null}
         {section.type === 'conditions' ? <Select value={level} onChange={(event) => setLevel(event.target.value)}><option value="ACTIVE">ACTIVE</option><option value="HISTORICAL">HISTORICAL</option></Select> : null}
-        {section.showPhone ? <Input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Telephone" /> : null}
-        {section.showCritical ? <label className="checkbox"><input type="checkbox" checked={critical} onChange={(event) => setCritical(event.target.checked)} /> Critique/principal</label> : null}
-        <Button type="button" onClick={submit}><Plus size={16} /> Ajouter</Button>
+        {section.type === 'emergency-contacts' ? <Input value={level} onChange={(event) => setLevel(event.target.value)} placeholder="Relation: parent, conjoint..." aria-label="Relation avec le patient" /> : null}
+        {section.showPhone ? <Input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+241 06 00 00 00" aria-label="Numero de telephone d'urgence" /> : null}
+        {section.showCritical ? <label className="checkbox"><input type="checkbox" checked={critical} onChange={(event) => setCritical(event.target.checked)} /> {section.type === 'emergency-contacts' ? 'Contact principal' : 'Critique/principal'}</label> : null}
+        <Button type="button" onClick={submit} disabled={isAdding}><Plus size={16} /> {isAdding ? 'Ajout...' : 'Ajouter'}</Button>
       </div>
-      {items.length ? <ul className="item-list">{items.map((item) => <li key={item.id}><span><strong>{item.label}</strong>{item.level ? ` · ${item.level}` : ''}{item.phone ? ` · ${item.phone}` : ''}</span><button type="button" aria-label="Supprimer" onClick={() => onDelete(item.id)}><Trash2 size={16} /></button></li>)}</ul> : <EmptyState title="Aucun element" text="Ajoutez uniquement les informations necessaires a cette section." />}
+      {error ? <p className="error" role="alert">{error}</p> : null}
+      {items.length ? <ul className="item-list">{items.map((item) => <li key={item.id}><span><strong>{item.label}</strong>{item.level ? ` - ${item.level}` : ''}{item.phone ? ` - ${item.phone}` : ''}</span><button type="button" aria-label="Supprimer" onClick={() => handleDelete(item.id)} disabled={isDeleting}><Trash2 size={16} /></button></li>)}</ul> : <EmptyState title="Aucun element" text="Ajoutez uniquement les informations necessaires a cette section." />}
     </Card>
   );
+}
+
+function errorMessage(caught: unknown, fallback: string) {
+  return caught instanceof Error && caught.message ? caught.message : fallback;
 }
 
 function cleanProfile(value: ProfileRequest): ProfileRequest {
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, entry === '' ? null : entry])) as ProfileRequest;
 }
 
-function cleanIdentity(value: { firstName: string; lastName: string; birthDate: string; gender: string }): UserProfileRequest {
+function cleanIdentity(value: { firstName: string; lastName: string; phone: string; birthDate: string; gender: string }): UserProfileRequest {
   return {
     firstName: value.firstName.trim(),
     lastName: value.lastName.trim(),
     birthDate: value.birthDate || null,
     gender: value.gender || null,
-    phone: null
+    phone: value.phone || null
   };
 }
 

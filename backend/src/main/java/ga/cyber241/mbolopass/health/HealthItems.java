@@ -4,14 +4,19 @@ import ga.cyber241.mbolopass.common.Enums.AllergySeverity;
 import ga.cyber241.mbolopass.common.Enums.MedicalConditionStatus;
 import ga.cyber241.mbolopass.common.Enums.VaccinationStatus;
 import ga.cyber241.mbolopass.common.UuidEntity;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.UUID;
 
 @Entity
 @Table(name = "emergency_contacts")
@@ -42,15 +47,39 @@ class Allergy extends UuidEntity {
   private String label;
   @Enumerated(EnumType.STRING)
   private AllergySeverity severity;
+  @Column(columnDefinition = "boolean default false")
+  private Boolean critical = false;
   private String notes;
+  private UUID clinicalEncounterId;
+  private UUID professionalProfileId;
+  private String source;
+  private String verificationStatus;
+  private Instant validatedAt;
+  private UUID validatedByUserId;
+  private Instant createdAt;
+  private Instant updatedAt;
+  @PrePersist
+  public void onCreate() {
+    super.ensureId();
+    createdAt = Instant.now();
+    updatedAt = createdAt;
+  }
+  @PreUpdate
+  public void onUpdate() { updatedAt = Instant.now(); }
   public HealthProfile getHealthProfile() { return healthProfile; }
   public void setHealthProfile(HealthProfile healthProfile) { this.healthProfile = healthProfile; }
   public String getLabel() { return label; }
   public void setLabel(String label) { this.label = label; }
   public AllergySeverity getSeverity() { return severity; }
   public void setSeverity(AllergySeverity severity) { this.severity = severity; }
+  public boolean isCritical() { return Boolean.TRUE.equals(critical); }
+  public void setCritical(boolean critical) { this.critical = critical; }
   public String getNotes() { return notes; }
   public void setNotes(String notes) { this.notes = notes; }
+  public void setSource(String source) { this.source = source; }
+  public void setVerificationStatus(String verificationStatus) { this.verificationStatus = verificationStatus; }
+  public Instant getCreatedAt() { return createdAt; }
+  public Instant getUpdatedAt() { return updatedAt; }
 }
 
 @Entity
@@ -62,6 +91,26 @@ class MedicalCondition extends UuidEntity {
   @Enumerated(EnumType.STRING)
   private MedicalConditionStatus status;
   private String notes;
+  private UUID clinicalEncounterId;
+  private UUID createdByUserId;
+  private UUID professionalProfileId;
+  private UUID referenceCatalogId;
+  private String source;
+  private String verificationStatus;
+  private String clinicalStatus;
+  private Instant validatedAt;
+  private UUID validatedByUserId;
+  private UUID amendedFromId;
+  private Instant createdAt;
+  private Instant updatedAt;
+  @PrePersist
+  public void onCreate() {
+    super.ensureId();
+    createdAt = Instant.now();
+    updatedAt = createdAt;
+  }
+  @PreUpdate
+  public void onUpdate() { updatedAt = Instant.now(); }
   public HealthProfile getHealthProfile() { return healthProfile; }
   public void setHealthProfile(HealthProfile healthProfile) { this.healthProfile = healthProfile; }
   public String getLabel() { return label; }
@@ -70,6 +119,11 @@ class MedicalCondition extends UuidEntity {
   public void setStatus(MedicalConditionStatus status) { this.status = status; }
   public String getNotes() { return notes; }
   public void setNotes(String notes) { this.notes = notes; }
+  public void setSource(String source) { this.source = source; }
+  public void setVerificationStatus(String verificationStatus) { this.verificationStatus = verificationStatus; }
+  public void setClinicalStatus(String clinicalStatus) { this.clinicalStatus = clinicalStatus; }
+  public Instant getCreatedAt() { return createdAt; }
+  public Instant getUpdatedAt() { return updatedAt; }
 }
 
 @Entity

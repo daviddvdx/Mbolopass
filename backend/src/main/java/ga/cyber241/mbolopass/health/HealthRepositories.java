@@ -9,23 +9,30 @@ interface EmergencyContactRepository extends JpaRepository<EmergencyContact, UUI
   List<EmergencyContact> findByHealthProfileId(UUID profileId);
   Optional<EmergencyContact> findFirstByHealthProfileIdAndIsPrimaryTrue(UUID profileId);
   boolean existsByHealthProfileId(UUID profileId);
+  boolean existsByIdAndHealthProfileId(UUID id, UUID profileId);
 }
 
 interface AllergyRepository extends JpaRepository<Allergy, UUID> {
   List<Allergy> findByHealthProfileId(UUID profileId);
   boolean existsByHealthProfileId(UUID profileId);
+  boolean existsByHealthProfileIdAndLabelIgnoreCase(UUID profileId, String label);
+  boolean existsByIdAndHealthProfileId(UUID id, UUID profileId);
 }
 
 interface MedicalConditionRepository extends JpaRepository<MedicalCondition, UUID> {
   List<MedicalCondition> findByHealthProfileId(UUID profileId);
   boolean existsByHealthProfileId(UUID profileId);
+  boolean existsByHealthProfileIdAndLabelIgnoreCase(UUID profileId, String label);
+  boolean existsByIdAndHealthProfileId(UUID id, UUID profileId);
 }
 
 interface MedicationRepository extends JpaRepository<Medication, UUID> {
   List<Medication> findByHealthProfileId(UUID profileId);
   boolean existsByHealthProfileId(UUID profileId);
+  boolean existsByIdAndHealthProfileId(UUID id, UUID profileId);
 }
 
 interface VaccinationRepository extends JpaRepository<Vaccination, UUID> {
   List<Vaccination> findByHealthProfileId(UUID profileId);
+  boolean existsByIdAndHealthProfileId(UUID id, UUID profileId);
 }

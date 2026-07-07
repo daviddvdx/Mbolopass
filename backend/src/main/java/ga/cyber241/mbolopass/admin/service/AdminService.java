@@ -13,12 +13,14 @@ import ga.cyber241.mbolopass.admin.dto.AdminDtos.RoleRequest;
 import ga.cyber241.mbolopass.admin.dto.AdminDtos.StatusRequest;
 import ga.cyber241.mbolopass.common.Enums.QrTokenStatus;
 import ga.cyber241.mbolopass.common.Enums.Role;
+import ga.cyber241.mbolopass.clinical.ClinicalService;
 import ga.cyber241.mbolopass.dependent.DependentService;
 import ga.cyber241.mbolopass.document.MedicalDocumentService;
 import ga.cyber241.mbolopass.emergency.QrToken;
 import ga.cyber241.mbolopass.exception.ApiException;
 import ga.cyber241.mbolopass.health.HealthProfileService;
 import ga.cyber241.mbolopass.health.HealthProfileRepository;
+import ga.cyber241.mbolopass.medical.MedicalRecordService;
 import ga.cyber241.mbolopass.user.User;
 import ga.cyber241.mbolopass.user.UserRepository;
 import java.nio.charset.StandardCharsets;
@@ -32,10 +34,13 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.LongSupplier;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -49,8 +54,10 @@ public class AdminService {
   private final MedicalDocumentService documents;
   private final PasswordEncoder passwordEncoder;
   private final JdbcTemplate jdbcTemplate;
+  private final ClinicalService clinicalService;
+  private final MedicalRecordService medicalRecords;
 
-  public AdminService(UserRepository users, HealthProfileRepository profiles, HealthProfileService healthProfiles, AdminQrTokenRepository qrTokens, AdminAuditLogRepository auditLogs, DependentService dependents, MedicalDocumentService documents, PasswordEncoder passwordEncoder, JdbcTemplate jdbcTemplate) {
+  public AdminService(UserRepository users, HealthProfileRepository profiles, HealthProfileService healthProfiles, AdminQrTokenRepository qrTokens, AdminAuditLogRepository auditLogs, DependentService dependents, MedicalDocumentService documents, PasswordEncoder passwordEncoder, JdbcTemplate jdbcTemplate, ClinicalService clinicalService, MedicalRecordService medicalRecords) {
     this.users = users;
     this.profiles = profiles;
     this.healthProfiles = healthProfiles;
@@ -60,26 +67,29 @@ public class AdminService {
     this.documents = documents;
     this.passwordEncoder = passwordEncoder;
     this.jdbcTemplate = jdbcTemplate;
+    this.clinicalService = clinicalService;
+    this.medicalRecords = medicalRecords;
   }
 
-  @Transactional(readOnly = true)
+  @Transactional(readOnly = true, propagation = Propagation.NOT_SUPPORTED)
   public DashboardResponse dashboard() {
-    long total = users.count();
-    long active = users.countByEnabledTrue();
+    List<User> allUsers = users.findAll();
+    long total = allUsers.size();
+    long active = allUsers.stream().filter(User::isEnabled).count();
     return new DashboardResponse(
         total,
         active,
         total - active,
-        users.countByRole(Role.PATIENT),
-        users.countByRole(Role.PROFESSIONAL),
-        users.countByRole(Role.ADMIN),
-        qrTokens.countByStatus(QrTokenStatus.ACTIVE),
-        qrTokens.countByStatus(QrTokenStatus.REVOKED),
-        qrTokens.countByStatus(QrTokenStatus.EXPIRED),
-        emergencyAccessesLast24Hours(),
-        dependents.countEnabled(),
-        documents.countActive(),
-        qrTokens.countByDependentProfileIsNotNullAndStatus(QrTokenStatus.ACTIVE));
+        allUsers.stream().filter(user -> user.getRole() == Role.PATIENT).count(),
+        allUsers.stream().filter(user -> user.getRole() == Role.HEALTH_PROFESSIONAL).count(),
+        allUsers.stream().filter(user -> user.getRole() == Role.HEALTH_ADMIN).count(),
+        safeCount(() -> qrTokens.countByStatus(QrTokenStatus.ACTIVE)),
+        safeCount(() -> qrTokens.countByStatus(QrTokenStatus.REVOKED)),
+        safeCount(() -> qrTokens.countByStatus(QrTokenStatus.EXPIRED)),
+        safeCount(this::emergencyAccessesLast24Hours),
+        safeCount(dependents::countEnabled),
+        safeCount(documents::countActive),
+        safeCount(() -> qrTokens.countByDependentProfileIsNotNullAndStatus(QrTokenStatus.ACTIVE)));
   }
 
   @Transactional(readOnly = true)
@@ -110,7 +120,7 @@ public class AdminService {
   @Transactional
   public AdminUserDetail createUser(String actorEmail, CreateUserRequest request, String sourceIp) {
     Role role = request.role() == null ? Role.PATIENT : request.role();
-    if (role == Role.ADMIN) throw new ApiException(HttpStatus.BAD_REQUEST, "Creation ADMIN interdite par cette route");
+    if (role == Role.HEALTH_ADMIN) throw new ApiException(HttpStatus.BAD_REQUEST, "Creation HEALTH_ADMIN interdite par cette route");
     String email = request.email().toLowerCase(Locale.ROOT).trim();
     if (users.existsByEmail(email)) throw new ApiException(HttpStatus.CONFLICT, "Email deja utilise");
     User user = new User();
@@ -120,7 +130,11 @@ public class AdminService {
     user.setRole(role);
     user.setPasswordHash(passwordEncoder.encode(request.password()));
     users.save(user);
-    if (role == Role.PATIENT) healthProfiles.ensureFor(user);
+    if (role == Role.PATIENT) {
+      healthProfiles.ensureFor(user);
+      medicalRecords.ensureForPatient(user);
+    }
+    if (role == Role.HEALTH_PROFESSIONAL) clinicalService.ensureApprovedProfessionalProfile(user, actor(actorEmail));
     audit(actorEmail, "USER_CREATED", "USER", user.getId(), "role=" + role, sourceIp);
     return toDetail(user);
   }
@@ -130,8 +144,8 @@ public class AdminService {
     User actor = actor(actorEmail);
     User target = findUser(userId);
     if (actor.getId().equals(target.getId())) throw new ApiException(HttpStatus.BAD_REQUEST, "Un administrateur ne peut pas bloquer son propre compte");
-    if (target.getRole() == Role.ADMIN && target.isEnabled() && !request.enabled() && activeAdmins() <= 1) {
-      throw new ApiException(HttpStatus.BAD_REQUEST, "Impossible de bloquer le dernier ADMIN actif");
+    if (target.getRole() == Role.HEALTH_ADMIN && target.isEnabled() && !request.enabled() && activeAdmins() <= 1) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "Impossible de bloquer le dernier HEALTH_ADMIN actif");
     }
     target.setEnabled(request.enabled());
     users.save(target);
@@ -144,12 +158,16 @@ public class AdminService {
     User target = findUser(userId);
     Role previous = target.getRole();
     Role next = request.role();
-    if (previous == Role.ADMIN && next != Role.ADMIN && target.isEnabled() && activeAdmins() <= 1) {
-      throw new ApiException(HttpStatus.BAD_REQUEST, "Impossible de retirer le role du dernier ADMIN actif");
+    if (previous == Role.HEALTH_ADMIN && next != Role.HEALTH_ADMIN && target.isEnabled() && activeAdmins() <= 1) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "Impossible de retirer le role du dernier HEALTH_ADMIN actif");
     }
     target.setRole(next);
     users.save(target);
-    if (next == Role.PATIENT) healthProfiles.ensureFor(target);
+    if (next == Role.PATIENT) {
+      healthProfiles.ensureFor(target);
+      medicalRecords.ensureForPatient(target);
+    }
+    if (next == Role.HEALTH_PROFESSIONAL) clinicalService.ensureApprovedProfessionalProfile(target, actor(actorEmail));
     audit(actorEmail, "USER_ROLE_CHANGED", "USER", target.getId(), previous + "->" + next, sourceIp);
     return toDetail(target);
   }
@@ -234,7 +252,7 @@ public class AdminService {
 
   private boolean profileExists(User user) { return profiles.findByUserId(user.getId()).isPresent(); }
   private boolean activeQrExists(User user) { return !qrTokens.findByHealthProfileUserIdAndStatus(user.getId(), QrTokenStatus.ACTIVE).isEmpty(); }
-  private long activeAdmins() { return users.countByRoleAndEnabledTrue(Role.ADMIN); }
+  private long activeAdmins() { return users.countByRoleAndEnabledTrue(Role.HEALTH_ADMIN); }
 
   private boolean matchesSearch(User user, String search) {
     if (search == null || search.isBlank()) return true;
@@ -276,6 +294,14 @@ public class AdminService {
   private long emergencyAccessesLast24Hours() {
     Long count = jdbcTemplate.queryForObject("select count(*) from emergency_access_logs where accessed_at >= ?", Long.class, Instant.now().minus(24, ChronoUnit.HOURS));
     return count == null ? 0 : count;
+  }
+
+  private long safeCount(LongSupplier supplier) {
+    try {
+      return supplier.getAsLong();
+    } catch (DataAccessException | IllegalStateException ex) {
+      return 0;
+    }
   }
 
   private String displayName(User user) {

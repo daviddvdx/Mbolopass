@@ -2,6 +2,7 @@ import { BarChart3, CreditCard, FileText, LogOut, Settings, Shield, Users } from
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
+import { NotificationBell } from '../components/notifications/NotificationBell';
 
 const links = [
   { to: '/admin', label: 'Vue generale', icon: BarChart3 },
@@ -14,7 +15,7 @@ const links = [
 export function AdminLayout() {
   const { clearSession } = useAuth();
   const navigate = useNavigate();
-  function logout() { clearSession(); navigate('/connexion', { replace: true }); }
+  async function logout() { await clearSession(); navigate('/connexion', { replace: true }); }
   return (
     <main className="app-shell admin-shell">
       <aside className="sidebar admin-sidebar">
@@ -25,7 +26,7 @@ export function AdminLayout() {
         </nav>
         <button type="button" onClick={logout}><LogOut size={18} /> Deconnexion</button>
       </aside>
-      <section className="workspace admin-workspace"><Outlet /></section>
+      <section className="workspace admin-workspace"><header><NotificationBell /></header><Outlet /></section>
     </main>
   );
 }

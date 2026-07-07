@@ -56,7 +56,7 @@ class UserProfileSecurityTest {
                 "lastName", "Secure",
                 "birthDate", "2020-01-02",
                 "gender", "F",
-                "role", "ADMIN",
+                "role", "HEALTH_ADMIN",
                 "userId", UUID.randomUUID().toString()))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.firstName").value("Amina"))
@@ -66,7 +66,7 @@ class UserProfileSecurityTest {
         .andReturn();
 
     assertThat(result.getResponse().getContentAsString())
-        .doesNotContain("password", "passwordHash", "accessToken", "permissions", "ADMIN");
+        .doesNotContain("password", "passwordHash", "accessToken", "permissions", "HEALTH_ADMIN");
   }
 
   @Test

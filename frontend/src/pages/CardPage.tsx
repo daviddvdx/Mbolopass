@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   CreditCard,
   LockKeyhole,
-  PlusCircle,
   QrCode,
   RefreshCw,
   ShieldCheck,
@@ -12,18 +11,21 @@ import {
 import { QRCodeSVG } from 'qrcode.react';
 import {
   type CSSProperties,
-  type ReactNode,
   useEffect,
-  useMemo,
   useState,
 } from 'react';
 
 import cardImage from '../assets/card/card1.png';
-import { generateMyQrToken, getMyCard } from '../api/card.api';
+import {
+  getEmergencyQr,
+  getMyCard,
+  refreshEmergencyQr,
+} from '../api/card.api';
 import { ApiError } from '../api/client';
+import { fetchProfilePhoto } from '../api/profile.api';
 import { useAuth } from '../auth/AuthContext';
 import { Badge, Button, LoadingState } from '../components/ui';
-import type { CardInfo, QrTokenResponse } from '../types';
+import type { CardInfo, EmergencyQrResponse } from '../types';
 
 type MboloCard = CardInfo & {
   emergencyUrl?: string;
@@ -55,21 +57,134 @@ function getErrorMessage(error: unknown) {
   );
 }
 
-function getQrUrl(
-    card: MboloCard | null | undefined,
-    generatedQrUrl: string | null,
-) {
-  return (
-      generatedQrUrl ||
-      card?.emergencyUrl ||
-      card?.qrUrl ||
-      card?.activeQrUrl ||
-      null
-  );
+function displayValue(value: string | null | undefined) {
+  return value && value.trim() ? value : 'Non renseigné';
 }
 
-function getStatusTone(status?: string): 'teal' | 'warning' {
-  return status === 'ACTIVE' ? 'teal' : 'warning';
+function displayCardNumber(value: string | null | undefined) {
+  return value && value.trim() ? value : 'Initialisation en cours';
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return 'Non renseigné';
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return 'Non renseigné';
+  return date.toLocaleDateString('fr-FR');
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return 'Non renseigne';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Non renseigne';
+  return date.toLocaleString('fr-FR');
+}
+
+function formatEmergencyContact(card: MboloCard | null | undefined) {
+  const contact = card?.emergencyContact;
+  if (!contact) return 'Non renseigné';
+  return [contact.fullName, contact.phone].filter(Boolean).join(' - ') || 'Non renseigné';
+}
+
+function loadImage(src: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Image impossible a charger'));
+    image.src = src;
+  });
+}
+
+function drawFitImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
+  const scale = Math.min(width / image.naturalWidth, height / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  ctx.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+}
+
+function drawText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, maxWidth: number, fontSize: number, color = '#17304D') {
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.font = `800 ${fontSize}px Arial, sans-serif`;
+  ctx.textBaseline = 'middle';
+  let value = text;
+  while (ctx.measureText(value).width > maxWidth && value.length > 4) {
+    value = `${value.slice(0, -4)}...`;
+  }
+  ctx.fillText(value, x, y);
+  ctx.restore();
+}
+
+async function drawQrFromDom(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  const svg = document.querySelector('.mbolo-card-data-layer svg');
+  if (!(svg instanceof SVGElement)) return false;
+  const serialized = new XMLSerializer().serializeToString(svg);
+  const blob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  try {
+    const image = await loadImage(url);
+    ctx.drawImage(image, x, y, size, size);
+    return true;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function downloadCardImage(card: MboloCard, qrUrl: string | null, photoUrl: string | null) {
+  const background = await loadImage(cardImage);
+  const canvas = document.createElement('canvas');
+  canvas.width = background.naturalWidth;
+  canvas.height = background.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas indisponible');
+
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.drawImage(background, 0, 0, width, height);
+
+  const photoX = width * 0.073;
+  const photoY = height * 0.273;
+  const photoW = width * 0.202;
+  const photoH = photoW * 1.34;
+  ctx.save();
+  ctx.fillStyle = '#F8FCFD';
+  ctx.strokeStyle = 'rgba(23, 48, 77, 0.18)';
+  ctx.lineWidth = Math.max(2, width * 0.002);
+  ctx.fillRect(photoX, photoY, photoW, photoH);
+  ctx.strokeRect(photoX, photoY, photoW, photoH);
+  if (photoUrl) {
+    const photo = await loadImage(photoUrl);
+    drawFitImage(ctx, photo, photoX, photoY, photoW, photoH);
+  } else {
+    drawText(ctx, 'Photo', photoX + photoW * 0.27, photoY + photoH * 0.5, photoW * 0.72, width * 0.018, '#8EA6AF');
+  }
+  ctx.restore();
+
+  drawText(ctx, displayValue(card.fullName), width * 0.45, height * 0.308, width * 0.31, width * 0.025);
+  drawText(ctx, displayCardNumber(card.cardNumber), width * 0.45, height * 0.416, width * 0.28, width * 0.019);
+  drawText(ctx, displayValue(card.identityDocumentNumber), width * 0.45, height * 0.518, width * 0.28, width * 0.019);
+  drawText(ctx, formatDate(card.birthDate), width * 0.45, height * 0.62, width * 0.2, width * 0.019);
+  drawText(ctx, displayValue(card.gender), width * 0.418, height * 0.705, width * 0.11, width * 0.019);
+  drawText(ctx, displayValue(card.bloodType), width * 0.628, height * 0.705, width * 0.11, width * 0.02, '#C94A4A');
+  drawText(ctx, formatEmergencyContact(card), width * 0.40, height * 0.822, width * 0.37, width * 0.018);
+
+  const qrSize = width * 0.202;
+  const qrX = width * (1 - 0.068) - qrSize;
+  const qrY = height * 0.323;
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(qrX, qrY, qrSize, qrSize);
+  if (qrUrl) {
+    const drawn = await drawQrFromDom(ctx, qrX + qrSize * 0.06, qrY + qrSize * 0.06, qrSize * 0.88);
+    if (!drawn) drawText(ctx, 'QR', qrX + qrSize * 0.39, qrY + qrSize * 0.5, qrSize * 0.5, width * 0.02, '#8EA6AF');
+  } else {
+    drawText(ctx, 'QR', qrX + qrSize * 0.39, qrY + qrSize * 0.5, qrSize * 0.5, width * 0.02, '#8EA6AF');
+  }
+  ctx.restore();
+
+  const link = document.createElement('a');
+  link.href = canvas.toDataURL('image/png');
+  link.download = `${displayCardNumber(card.cardNumber).replace(/[^a-zA-Z0-9-]/g, '-')}-mbolopass.png`;
+  link.click();
 }
 
 function useIsMobile() {
@@ -91,32 +206,22 @@ function useIsMobile() {
 }
 
 function HealthCardPreview({
+  card,
+  qrUrl,
+  photoUrl,
   isMobile,
   statusLabel,
   statusTone,
-  children,
 }: {
+  card: MboloCard | null | undefined;
+  qrUrl: string | null;
+  photoUrl: string | null;
   isMobile: boolean;
   statusLabel: string;
   statusTone: 'teal' | 'warning';
-  children?: ReactNode;
 }) {
-  /*
-    Exemple futur :
-
-    <span
-      style={{
-        ...styles.cardTextOverlay,
-        left: '12%',
-        top: '61%',
-      }}
-    >
-      {card?.fullName}
-    </span>
-  */
-
   return (
-      <section style={styles.cardShowcase}>
+      <section className="mbolo-card-print-area" style={styles.cardShowcase}>
         <div style={styles.cardShowcaseHeader}>
           <div>
             <p style={styles.cardShowcaseEyebrow}>Passeport santé numérique</p>
@@ -130,6 +235,7 @@ function HealthCardPreview({
           <div style={styles.cardAmbientGlow} />
 
           <div
+              className="mbolo-card-shell"
               style={{
                 ...styles.cardShell,
                 transform: isMobile
@@ -143,7 +249,51 @@ function HealthCardPreview({
                 style={styles.cardArtwork}
             />
 
-            <div style={styles.cardDataLayer}>{children}</div>
+            <div className="mbolo-card-data-layer" style={styles.cardDataLayer}>
+              <div style={styles.cardPhotoFrame}>
+                {photoUrl ? (
+                    <img src={photoUrl} alt="Photo de profil" style={styles.cardPhoto} />
+                ) : (
+                    <span style={styles.cardPhotoPlaceholder}>Photo</span>
+                )}
+              </div>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardNameOverlay }}>
+                {displayValue(card?.fullName)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardNumberOverlay }}>
+                {displayCardNumber(card?.cardNumber)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardIdentityOverlay }}>
+                {displayValue(card?.identityDocumentNumber)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardBirthDateOverlay }}>
+                {formatDate(card?.birthDate)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardGenderOverlay }}>
+                {displayValue(card?.gender)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardBloodTypeOverlay }}>
+                {displayValue(card?.bloodType)}
+              </span>
+
+              <span style={{ ...styles.cardTextOverlay, ...styles.cardEmergencyContactOverlay }}>
+                {formatEmergencyContact(card)}
+              </span>
+
+              <div style={styles.cardQrOverlay}>
+                {qrUrl ? (
+                    <QRCodeSVG value={qrUrl} size={160} level="H" includeMargin style={styles.cardQrArtwork} />
+                ) : (
+                    <span style={styles.cardQrPlaceholder}>QR</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -155,12 +305,12 @@ function HealthCardPreview({
 }
 
 export function CardPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, token } = useAuth();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
-  const [generatedQrUrl, setGeneratedQrUrl] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
   const cardQuery = useQuery<MboloCard | null, Error>({
     queryKey: ['health-card', 'me'],
@@ -183,61 +333,83 @@ export function CardPage() {
     },
   });
 
-  const generateQrMutation = useMutation<QrTokenResponse, Error>({
+  const emergencyQrQuery = useQuery<EmergencyQrResponse, Error>({
+    queryKey: ['emergency-qr', 'me'],
+    queryFn: () => getEmergencyQr(token),
+    enabled: isAuthenticated && Boolean(token),
+    staleTime: 60_000,
+  });
+
+  const refreshEmergencyQrMutation = useMutation<EmergencyQrResponse, Error>({
     mutationFn: async () => {
       if (!isAuthenticated) {
-        throw new Error('Votre session a expiré. Veuillez vous reconnecter.');
+        throw new Error('Votre session a expire. Veuillez vous reconnecter.');
       }
 
-      return await generateMyQrToken();
+      return refreshEmergencyQr(token);
     },
 
-    onSuccess: async (response) => {
-      const newQrUrl = response.emergencyUrl || null;
-
-      setGeneratedQrUrl(newQrUrl);
-      setSuccessMessage(
-          newQrUrl
-              ? 'Votre QR Code d’urgence est maintenant actif.'
-              : 'Votre carte MboloPass a été mise à jour.',
-      );
-
-      await queryClient.invalidateQueries({
-        queryKey: ['health-card', 'me'],
-      });
+    onSuccess: async () => {
+      setSuccessMessage('Votre QR d urgence a ete mis a jour. Imprimez une nouvelle carte pour utiliser ces nouvelles informations hors ligne.');
+      await queryClient.invalidateQueries({ queryKey: ['emergency-qr', 'me'] });
+      await queryClient.invalidateQueries({ queryKey: ['health-card', 'me'] });
     },
 
     onError: () => {
       setSuccessMessage(null);
     },
   });
-
   const card = cardQuery.data;
   const hasCard = Boolean(card);
 
-  const qrUrl = useMemo(() => {
-    return getQrUrl(card, generatedQrUrl);
-  }, [card, generatedQrUrl]);
+  const permanentQr = emergencyQrQuery.data;
+  const printableQrValue = emergencyQrQuery.data?.payload ?? null;
 
-  const qrIsActive = Boolean(qrUrl) && card?.qrStatus === 'ACTIVE';
-
-  function handleCreateCard() {
-    setSuccessMessage(null);
-    generateQrMutation.mutate();
-  }
-
-  function handleRegenerateQr() {
-    setSuccessMessage(null);
-
-    const confirmed = window.confirm(
-        'La régénération désactivera immédiatement votre ancien QR Code. Continuer ?',
-    );
-
-    if (!confirmed) {
-      return;
+  useEffect(() => {
+    let revoked = false;
+    if (!token || !card?.hasProfilePhoto) {
+      setPhotoUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+      return undefined;
     }
 
-    generateQrMutation.mutate();
+    fetchProfilePhoto(token).then((blob) => {
+      if (revoked) return;
+      setPhotoUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return blob ? URL.createObjectURL(blob) : null;
+      });
+    });
+
+    return () => {
+      revoked = true;
+      setPhotoUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return null;
+      });
+    };
+  }, [card?.hasProfilePhoto, token]);
+
+  function handleRefreshEmergencyQr() {
+    setSuccessMessage(null);
+    const confirmed = window.confirm(
+        'Votre nouveau QR contiendra vos dernieres informations de sante. Les anciennes cartes imprimees continueront d afficher les anciennes donnees hors connexion. Imprimez une nouvelle carte apres cette mise a jour.',
+    );
+    if (confirmed) refreshEmergencyQrMutation.mutate();
+  }
+  function handlePrintCard() {
+    window.print();
+  }
+
+  async function handleDownloadCardImage() {
+    if (!card) return;
+    try {
+      await downloadCardImage(card, printableQrValue, photoUrl);
+    } catch {
+      window.alert('Impossible de telecharger l image de la carte pour le moment.');
+    }
   }
 
   if (cardQuery.isLoading) {
@@ -312,6 +484,9 @@ export function CardPage() {
               }}
           >
             <HealthCardPreview
+                card={null}
+                qrUrl={null}
+                photoUrl={null}
                 isMobile={isMobile}
                 statusLabel="À CRÉER"
                 statusTone="warning"
@@ -346,28 +521,24 @@ export function CardPage() {
                 </div>
               </div>
 
-              {generateQrMutation.isError && (
-                  <div style={styles.inlineError}>
-                    <AlertCircle size={18} />
-                    <span>{getErrorMessage(generateQrMutation.error)}</span>
-                  </div>
-              )}
-
               <div style={styles.actions}>
                 <Button
                     type="button"
-                    onClick={handleCreateCard}
-                    disabled={generateQrMutation.isPending}
+                    onClick={() => {
+                      void cardQuery.refetch();
+                      void emergencyQrQuery.refetch();
+                    }}
+                    disabled={cardQuery.isFetching || emergencyQrQuery.isFetching}
                 >
-                  {generateQrMutation.isPending ? (
+                  {cardQuery.isFetching || emergencyQrQuery.isFetching ? (
                       <>
                         <RefreshCw size={18} style={styles.spin} />
-                        Création en cours...
+                        Creation en cours...
                       </>
                   ) : (
                       <>
-                        <PlusCircle size={18} />
-                        Créer ma carte MboloPass
+                        <CreditCard size={18} />
+                        Creer ma carte MboloPass
                       </>
                   )}
                 </Button>
@@ -398,22 +569,70 @@ export function CardPage() {
             }}
         >
           <HealthCardPreview
+              card={card}
+              qrUrl={printableQrValue}
+              photoUrl={photoUrl}
               isMobile={isMobile}
-              statusLabel={card?.qrStatus === 'ACTIVE' ? 'CARTE ACTIVE' : 'À ACTIVER'}
-              statusTone={getStatusTone(card?.qrStatus)}
+              statusLabel={printableQrValue ? 'QR HORS LIGNE PRET' : 'QR A CREER'}
+              statusTone={printableQrValue ? 'teal' : 'warning'}
           />
 
           <section style={styles.contentPanel}>
             <div style={styles.qrHeader}>
               <div>
-                <p style={styles.eyebrow}>Accès d’urgence</p>
-                <h2 style={styles.panelTitle}>Mon QR Code sécurisé</h2>
+                <p style={styles.eyebrow}>QR d'urgence permanent</p>
+                <h2 style={styles.panelTitle}>Carte imprimable</h2>
               </div>
 
-              <Badge tone={qrIsActive ? 'teal' : 'warning'}>
-                {qrIsActive ? 'ACTIF' : 'À GÉNÉRER'}
+              <Badge tone={Boolean(permanentQr?.payload) ? 'teal' : 'warning'}>
+                {Boolean(permanentQr?.payload) ? 'ACTIF' : 'DESACTIVE'}
               </Badge>
             </div>
+
+            <p style={styles.mutedText}>
+              Ce QR permet d'afficher vos informations vitales en cas d'urgence.
+              Il ne donne pas acces a votre dossier medical complet.
+            </p>
+
+            {emergencyQrQuery.isLoading ? (
+                <LoadingState />
+            ) : emergencyQrQuery.isError ? (
+                <div style={styles.inlineError}>
+                  <AlertCircle size={18} />
+                  <span>{getErrorMessage(emergencyQrQuery.error)}</span>
+                </div>
+            ) : printableQrValue ? (
+                <div style={styles.qrZone}>
+                  <div style={styles.qrWrapper}>
+                    <QRCodeSVG
+                        value={printableQrValue}
+                        size={isMobile ? 190 : 260}
+                        includeMargin
+                        level="M"
+                    />
+                  </div>
+
+                  <div style={styles.qrLabel}>
+                    <QrCode size={19} />
+                    <span>QR permanent - informations limitees - dossier complet protege</span>
+                  </div>
+                </div>
+            ) : (
+                <div style={styles.emptyQrState}>
+                  <QrCode size={46} />
+                  <h3 style={styles.emptyQrTitle}>QR d'urgence desactive</h3>
+                  <p style={styles.emptyQrText}>
+                    Vous pouvez le regenerer pour rendre votre carte imprimable
+                    de nouveau utilisable.
+                  </p>
+                </div>
+            )}
+
+            <div style={styles.cardStats}>
+              <span>Creation<strong>{formatDateTime(permanentQr?.generatedAt)}</strong></span>
+              <span>Version<strong>{permanentQr?.version ?? '-'}</strong></span>
+            </div>
+
 
             {successMessage && (
                 <div style={styles.inlineSuccess}>
@@ -422,88 +641,37 @@ export function CardPage() {
                 </div>
             )}
 
-            {generateQrMutation.isError && (
+            {refreshEmergencyQrMutation.isError && (
                 <div style={styles.inlineError}>
                   <AlertCircle size={18} />
-                  <span>{getErrorMessage(generateQrMutation.error)}</span>
+                  <span>{getErrorMessage(refreshEmergencyQrMutation.error)}</span>
                 </div>
             )}
-
-            {qrUrl ? (
-                <div style={styles.qrZone}>
-                  <div style={styles.qrWrapper}>
-                    <QRCodeSVG
-                        value={qrUrl}
-                        size={isMobile ? 175 : 210}
-                        includeMargin
-                        level="H"
-                    />
-                  </div>
-
-                  <div style={styles.qrLabel}>
-                    <QrCode size={19} />
-                    <span>QR Code d’accès d’urgence sécurisé</span>
-                  </div>
-                </div>
-            ) : (
-                <div style={styles.emptyQrState}>
-                  <QrCode size={46} />
-                  <h3 style={styles.emptyQrTitle}>
-                    Votre QR Code n’est pas encore généré
-                  </h3>
-                  <p style={styles.emptyQrText}>
-                    Générez-le maintenant afin de pouvoir utiliser votre carte en
-                    situation d’urgence.
-                  </p>
-                </div>
-            )}
-
-            <div style={styles.securityNote}>
-              <ShieldCheck size={21} />
-              <p style={styles.securityText}>
-                Ce QR Code ne contient aucune donnée médicale. Il donne accès à
-                une fiche d’urgence limitée et sécurisée.
-              </p>
-            </div>
 
             <div style={styles.actions}>
-              {!qrUrl ? (
-                  <Button
-                      type="button"
-                      onClick={handleCreateCard}
-                      disabled={generateQrMutation.isPending}
-                  >
-                    {generateQrMutation.isPending ? (
-                        <>
-                          <RefreshCw size={18} style={styles.spin} />
-                          Génération en cours...
-                        </>
-                    ) : (
-                        <>
-                          <QrCode size={18} />
-                          Générer mon QR Code
-                        </>
-                    )}
-                  </Button>
-              ) : (
-                  <Button
-                      type="button"
-                      onClick={handleRegenerateQr}
-                      disabled={generateQrMutation.isPending}
-                  >
-                    {generateQrMutation.isPending ? (
-                        <>
-                          <RefreshCw size={18} style={styles.spin} />
-                          Régénération en cours...
-                        </>
-                    ) : (
-                        <>
-                          <RefreshCw size={18} />
-                          Régénérer mon QR Code
-                        </>
-                    )}
-                  </Button>
-              )}
+              <Button
+                  type="button"
+                  onClick={handleRefreshEmergencyQr}
+                  disabled={refreshEmergencyQrMutation.isPending}
+              >
+                {refreshEmergencyQrMutation.isPending ? <RefreshCw size={18} style={styles.spin} /> : <RefreshCw size={18} />}
+                Mettre a jour mon QR
+              </Button><Button
+                  type="button"
+                  className="ghost"
+                  onClick={handlePrintCard}
+              >
+                <CreditCard size={18} />
+                Imprimer la carte
+              </Button>
+              <Button
+                  type="button"
+                  className="ghost"
+                  onClick={handleDownloadCardImage}
+              >
+                <CreditCard size={18} />
+                Télécharger l'image
+              </Button>
             </div>
           </section>
         </section>
@@ -639,6 +807,35 @@ const styles: Record<string, CSSProperties> = {
     pointerEvents: 'none',
   },
 
+  cardPhotoFrame: {
+    position: 'absolute',
+    left: '7.3%',
+    top: '27.3%',
+    width: '20.2%',
+    aspectRatio: '1 / 1.34',
+    overflow: 'hidden',
+    display: 'grid',
+    placeItems: 'center',
+    borderRadius: '7%',
+    color: '#8EA6AF',
+    background: 'linear-gradient(135deg, rgba(248, 252, 253, 0.82), rgba(203, 219, 225, 0.72))',
+    border: '1px solid rgba(23, 48, 77, 0.16)',
+  },
+
+  cardPhoto: {
+    maxWidth: '100%',
+    maxHeight: '100%',
+    width: 'auto',
+    height: 'auto',
+  },
+
+  cardPhotoPlaceholder: {
+    fontSize: 'clamp(0.45rem, 1.15vw, 0.82rem)',
+    fontWeight: 800,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+  },
+
   cardTextOverlay: {
     position: 'absolute',
     transform: 'translate(-50%, -50%)',
@@ -647,6 +844,92 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 800,
     lineHeight: 1.1,
     whiteSpace: 'nowrap',
+  },
+
+  cardNameOverlay: {
+    left: '45%',
+    top: '30.8%',
+    width: '31%',
+    fontSize: 'clamp(0.78rem, 1.45vw, 1.25rem)',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardNumberOverlay: {
+    left: '45%',
+    top: '41.6%',
+    width: '28%',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardIdentityOverlay: {
+    left: '45%',
+    top: '51.8%',
+    width: '28%',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardBirthDateOverlay: {
+    left: '45%',
+    top: '62%',
+    width: '20%',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardGenderOverlay: {
+    left: '41.8%',
+    top: '70.5%',
+    width: '11%',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardBloodTypeOverlay: {
+    left: '62.8%',
+    top: '70.5%',
+    width: '11%',
+    color: '#C94A4A',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardEmergencyContactOverlay: {
+    left: '40%',
+    top: '82.2%',
+    width: '37%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    textAlign: 'left',
+    transform: 'translate(0, -50%)',
+  },
+
+  cardQrOverlay: {
+    position: 'absolute',
+    right: '6.8%',
+    top: '32.3%',
+    width: '20.2%',
+    aspectRatio: '1 / 1',
+    display: 'grid',
+    placeItems: 'center',
+    padding: '1.3%',
+    borderRadius: '6%',
+    background: '#ffffff',
+    boxShadow: '0 2px 8px rgba(23, 48, 77, 0.12)',
+  },
+
+  cardQrArtwork: {
+    width: '100%',
+    height: '100%',
+  },
+
+  cardQrPlaceholder: {
+    color: '#8EA6AF',
+    fontSize: 'clamp(0.58rem, 1.3vw, 0.95rem)',
+    fontWeight: 900,
+    letterSpacing: '0.08em',
   },
 
   cardShowcaseFooter: {
@@ -786,7 +1069,20 @@ const styles: Record<string, CSSProperties> = {
   actions: {
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
     marginTop: 'auto',
+  },
+
+  cardStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 10,
+  },
+
+  divider: {
+    height: 1,
+    background: 'rgba(148, 163, 184, 0.22)',
   },
 
   inlineError: {

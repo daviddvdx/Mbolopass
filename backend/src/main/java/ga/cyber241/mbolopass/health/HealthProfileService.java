@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,8 +27,9 @@ public class HealthProfileService {
   private final VaccinationRepository vaccinations;
   private final EmergencyContactRepository contacts;
   private final PrivateFileStorageService storage;
+  private final HealthPassNumberGenerator cardNumbers;
 
-  public HealthProfileService(HealthProfileRepository profiles, AllergyRepository allergies, MedicalConditionRepository conditions, MedicationRepository medications, VaccinationRepository vaccinations, EmergencyContactRepository contacts, PrivateFileStorageService storage) {
+  public HealthProfileService(HealthProfileRepository profiles, AllergyRepository allergies, MedicalConditionRepository conditions, MedicationRepository medications, VaccinationRepository vaccinations, EmergencyContactRepository contacts, PrivateFileStorageService storage, HealthPassNumberGenerator cardNumbers) {
     this.profiles = profiles;
     this.allergies = allergies;
     this.conditions = conditions;
@@ -35,15 +37,22 @@ public class HealthProfileService {
     this.vaccinations = vaccinations;
     this.contacts = contacts;
     this.storage = storage;
+    this.cardNumbers = cardNumbers;
   }
 
   @Transactional
   public HealthProfile ensureFor(User user) {
-    return profiles.findByUserId(user.getId()).orElseGet(() -> {
-      HealthProfile profile = new HealthProfile();
-      profile.setUser(user);
-      return profiles.save(profile);
+    HealthProfile profile = profiles.findByUserId(user.getId()).orElseGet(() -> {
+      HealthProfile created = new HealthProfile();
+      created.setUser(user);
+      created.setCardNumber(cardNumbers.generateUniqueCardNumber());
+      return profiles.save(created);
     });
+    if (profile.getCardNumber() == null || profile.getCardNumber().isBlank()) {
+      profiles.assignMissingCardNumber(profile.getId(), cardNumbers.generateUniqueCardNumber());
+      profile = profiles.findById(profile.getId()).orElseThrow();
+    }
+    return profile;
   }
 
   public HealthProfile current(String email) {
@@ -62,7 +71,16 @@ public class HealthProfileService {
   }
 
   public ProfileResponse toProfile(HealthProfile profile) {
-    return new ProfileResponse(profile.getId(), profile.getBirthDate(), profile.getGender(), profile.getBloodType(), profile.getEmergencyNotes(), profile.getLastMedicalVisitDate(), profile.getUpdatedAt());
+    return new ProfileResponse(profile.getId(), profile.getCardNumber(), profile.getBirthDate(), profile.getGender(), profile.getBloodType(), profile.getEmergencyNotes(), profile.getLastMedicalVisitDate(), profile.getUpdatedAt());
+  }
+
+  @Transactional
+  public int backfillMissingCardNumbers() {
+    int updated = 0;
+    for (UUID id : profiles.findIdsMissingCardNumber()) {
+      updated += profiles.assignMissingCardNumber(id, cardNumbers.generateUniqueCardNumber());
+    }
+    return updated;
   }
 
   public int completion(HealthProfile profile) {
@@ -108,7 +126,7 @@ public class HealthProfileService {
   public List<ItemResponse> list(String email, String type) {
     HealthProfile profile = current(email);
     return switch (type) {
-      case "allergies" -> allergies.findByHealthProfileId(profile.getId()).stream().map(a -> new ItemResponse(a.getId(), a.getLabel(), a.getSeverity().name(), a.getNotes(), null, null, null, false, null, null, null, null)).toList();
+      case "allergies" -> allergies.findByHealthProfileId(profile.getId()).stream().map(a -> new ItemResponse(a.getId(), a.getLabel(), a.getSeverity().name(), a.getNotes(), null, null, null, a.isCritical(), null, null, null, null)).toList();
       case "conditions" -> conditions.findByHealthProfileId(profile.getId()).stream().map(c -> new ItemResponse(c.getId(), c.getLabel(), c.getStatus().name(), c.getNotes(), null, null, null, false, null, null, null, null)).toList();
       case "medications" -> medications.findByHealthProfileId(profile.getId()).stream().map(m -> new ItemResponse(m.getId(), m.getName(), null, m.getNotes(), m.getDosage(), m.getFrequency(), m.getEndDate(), m.isCritical(), null, null, null, null)).toList();
       case "vaccinations" -> vaccinations.findByHealthProfileId(profile.getId()).stream().map(v -> new ItemResponse(v.getId(), v.getVaccineName(), v.getStatus().name(), null, null, null, null, false, v.getAdministeredOn(), v.getNextDueDate(), null, null)).toList();
@@ -122,30 +140,38 @@ public class HealthProfileService {
     HealthProfile profile = current(email);
     return switch (type) {
       case "allergies" -> {
+        String label = validateLabel(request.label());
+        if (allergies.existsByHealthProfileIdAndLabelIgnoreCase(profile.getId(), label)) {
+          throw new ApiException(HttpStatus.CONFLICT, "Cette allergie existe deja");
+        }
         Allergy a = new Allergy();
-        a.setHealthProfile(profile); a.setLabel(request.label()); a.setSeverity(AllergySeverity.valueOf(nvl(request.level(), "LOW"))); a.setNotes(request.notes());
+        a.setHealthProfile(profile); a.setLabel(label); a.setSeverity(parseAllergySeverity(request.level())); a.setCritical(request.critical()); a.setNotes(trimToNull(request.notes())); a.setSource("PATIENT_REPORTED"); a.setVerificationStatus("DRAFT");
         yield listOne(allergies.save(a));
       }
       case "conditions" -> {
+        String label = validateLabel(request.label());
+        if (conditions.existsByHealthProfileIdAndLabelIgnoreCase(profile.getId(), label)) {
+          throw new ApiException(HttpStatus.CONFLICT, "Cette maladie ou condition existe deja");
+        }
         MedicalCondition c = new MedicalCondition();
-        c.setHealthProfile(profile); c.setLabel(request.label()); c.setStatus(MedicalConditionStatus.valueOf(nvl(request.level(), "ACTIVE"))); c.setNotes(request.notes());
+        c.setHealthProfile(profile); c.setLabel(label); c.setStatus(parseConditionStatus(request.level())); c.setNotes(trimToNull(request.notes())); c.setSource("PATIENT_REPORTED"); c.setVerificationStatus("DRAFT"); c.setClinicalStatus(c.getStatus().name());
         yield new ItemResponse(conditions.save(c).getId(), c.getLabel(), c.getStatus().name(), c.getNotes(), null, null, null, false, null, null, null, null);
       }
       case "medications" -> {
         Medication m = new Medication();
-        m.setHealthProfile(profile); m.setName(request.label()); m.setDosage(request.dosage()); m.setFrequency(request.frequency()); m.setEndDate(request.endDate()); m.setCritical(request.critical()); m.setNotes(request.notes());
+        m.setHealthProfile(profile); m.setName(validateLabel(request.label())); m.setDosage(trimToNull(request.dosage())); m.setFrequency(trimToNull(request.frequency())); m.setEndDate(request.endDate()); m.setCritical(request.critical()); m.setNotes(trimToNull(request.notes()));
         Medication saved = medications.save(m);
         yield new ItemResponse(saved.getId(), saved.getName(), null, saved.getNotes(), saved.getDosage(), saved.getFrequency(), saved.getEndDate(), saved.isCritical(), null, null, null, null);
       }
       case "vaccinations" -> {
         Vaccination v = new Vaccination();
-        v.setHealthProfile(profile); v.setVaccineName(request.label()); v.setAdministeredOn(request.administeredOn()); v.setNextDueDate(request.nextDueDate()); v.setStatus(VaccinationStatus.valueOf(nvl(request.level(), "UPCOMING")));
+        v.setHealthProfile(profile); v.setVaccineName(validateLabel(request.label())); v.setAdministeredOn(request.administeredOn()); v.setNextDueDate(request.nextDueDate()); v.setStatus(parseVaccinationStatus(request.level()));
         Vaccination saved = vaccinations.save(v);
         yield new ItemResponse(saved.getId(), saved.getVaccineName(), saved.getStatus().name(), null, null, null, null, false, saved.getAdministeredOn(), saved.getNextDueDate(), null, null);
       }
       case "emergency-contacts" -> {
         EmergencyContact c = new EmergencyContact();
-        c.setHealthProfile(profile); c.setFullName(request.label()); c.setRelationship(request.level()); c.setPhone(request.phone()); c.setPrimary(request.critical());
+        c.setHealthProfile(profile); c.setFullName(validateLabel(request.label())); c.setRelationship(trimToNull(request.level())); c.setPhone(trimToNull(request.phone())); c.setPrimary(request.critical());
         EmergencyContact saved = contacts.save(c);
         yield new ItemResponse(saved.getId(), saved.getFullName(), saved.getRelationship(), null, null, null, null, saved.isPrimary(), null, null, saved.getPhone(), null);
       }
@@ -156,7 +182,14 @@ public class HealthProfileService {
   @Transactional
   public void delete(String email, String type, UUID itemId) {
     HealthProfile profile = current(email);
-    boolean owned = list(email, type).stream().anyMatch(i -> i.id().equals(itemId));
+    boolean owned = switch (type) {
+      case "allergies" -> allergies.existsByIdAndHealthProfileId(itemId, profile.getId());
+      case "conditions" -> conditions.existsByIdAndHealthProfileId(itemId, profile.getId());
+      case "medications" -> medications.existsByIdAndHealthProfileId(itemId, profile.getId());
+      case "vaccinations" -> vaccinations.existsByIdAndHealthProfileId(itemId, profile.getId());
+      case "emergency-contacts" -> contacts.existsByIdAndHealthProfileId(itemId, profile.getId());
+      default -> throw new ApiException(HttpStatus.BAD_REQUEST, "Type invalide");
+    };
     if (!owned) throw new ApiException(HttpStatus.NOT_FOUND, "Element introuvable");
     switch (type) {
       case "allergies" -> allergies.deleteById(itemId);
@@ -169,19 +202,56 @@ public class HealthProfileService {
   }
 
   private ItemResponse listOne(Allergy a) {
-    return new ItemResponse(a.getId(), a.getLabel(), a.getSeverity().name(), a.getNotes(), null, null, null, false, null, null, null, null);
+    return new ItemResponse(a.getId(), a.getLabel(), a.getSeverity().name(), a.getNotes(), null, null, null, a.isCritical(), null, null, null, null);
+  }
+
+  private String validateLabel(String value) {
+    String label = trimToNull(value);
+    if (label == null) throw new ApiException(HttpStatus.BAD_REQUEST, "Le libelle est obligatoire");
+    if (label.length() < 2) throw new ApiException(HttpStatus.BAD_REQUEST, "Le libelle doit contenir au moins 2 caracteres");
+    if (label.length() > 120) throw new ApiException(HttpStatus.BAD_REQUEST, "Le libelle doit contenir au maximum 120 caracteres");
+    return label;
+  }
+
+  private AllergySeverity parseAllergySeverity(String value) {
+    try {
+      return AllergySeverity.valueOf(nvl(value, "LOW").trim().toUpperCase());
+    } catch (IllegalArgumentException ex) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "Severite d'allergie invalide");
+    }
+  }
+
+  private MedicalConditionStatus parseConditionStatus(String value) {
+    try {
+      return MedicalConditionStatus.valueOf(nvl(value, "ACTIVE").trim().toUpperCase());
+    } catch (IllegalArgumentException ex) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "Statut de condition invalide");
+    }
+  }
+
+  private VaccinationStatus parseVaccinationStatus(String value) {
+    try {
+      return VaccinationStatus.valueOf(nvl(value, "UPCOMING").trim().toUpperCase());
+    } catch (IllegalArgumentException ex) {
+      throw new ApiException(HttpStatus.BAD_REQUEST, "Statut de vaccination invalide");
+    }
   }
 
   private String nvl(String value, String fallback) { return value == null || value.isBlank() ? fallback : value; }
+  private String trimToNull(String value) {
+    if (value == null) return null;
+    String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
+  }
   private String mimeFromKey(String key) {
     if (key.endsWith(".png")) return "image/png";
     if (key.endsWith(".webp")) return "image/webp";
     return "image/jpeg";
   }
 
-  public record ProfileResponse(UUID id, LocalDate birthDate, String gender, String bloodType, String emergencyNotes, LocalDate lastMedicalVisitDate, Instant updatedAt) {}
+  public record ProfileResponse(UUID id, String cardNumber, LocalDate birthDate, String gender, String bloodType, String emergencyNotes, LocalDate lastMedicalVisitDate, Instant updatedAt) {}
   public record ProfileRequest(LocalDate birthDate, String gender, String bloodType, String emergencyNotes, LocalDate lastMedicalVisitDate) {}
-  public record ItemRequest(@NotBlank String label, String level, String notes, String dosage, String frequency, LocalDate endDate, boolean critical, LocalDate administeredOn, LocalDate nextDueDate, String phone) {}
+  public record ItemRequest(@NotBlank @Size(min = 2, max = 120) String label, String level, String notes, String dosage, String frequency, LocalDate endDate, boolean critical, LocalDate administeredOn, LocalDate nextDueDate, String phone) {}
   public record ItemResponse(UUID id, String label, String level, String notes, String dosage, String frequency, LocalDate endDate, boolean critical, LocalDate administeredOn, LocalDate nextDueDate, String phone, String extra) {}
   public record ProfileBundle(HealthProfile profile, List<Allergy> allergies, List<MedicalCondition> conditions, List<Medication> medications, List<Vaccination> vaccinations, List<EmergencyContact> contacts) {}
   public record PhotoResponse(boolean uploaded) {}

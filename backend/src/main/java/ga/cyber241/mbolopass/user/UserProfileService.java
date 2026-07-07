@@ -36,6 +36,7 @@ public class UserProfileService {
     HealthProfile profile = healthProfiles.ensureFor(user);
     user.setFirstName(request.firstName().trim());
     user.setLastName(request.lastName().trim());
+    user.setPhone(blankToNull(request.phone()));
     profile.setBirthDate(request.birthDate());
     profile.setGender(blankToNull(request.gender()));
     return toResponse(users.save(user), profile);
@@ -51,7 +52,8 @@ public class UserProfileService {
         user.getFirstName(),
         user.getLastName(),
         user.getEmail(),
-        null,
+        user.getPhone(),
+        profile.getCardNumber(),
         profile.getBirthDate(),
         profile.getGender(),
         profile.getProfilePhotoUrl() == null || profile.getProfilePhotoUrl().isBlank() ? null : PHOTO_ENDPOINT);
@@ -59,7 +61,7 @@ public class UserProfileService {
 
   private String blankToNull(String value) { return value == null || value.isBlank() ? null : value.trim(); }
 
-  public record UserProfileResponse(UUID id, String firstName, String lastName, String email, String phone, LocalDate birthDate, String gender, String profilePhotoUrl) {}
+  public record UserProfileResponse(UUID id, String firstName, String lastName, String email, String phone, String cardNumber, LocalDate birthDate, String gender, String profilePhotoUrl) {}
   public record UpdateUserProfileRequest(
       @NotBlank @Size(max = 80) String firstName,
       @NotBlank @Size(max = 80) String lastName,

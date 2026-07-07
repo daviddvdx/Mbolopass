@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.HexFormat;
@@ -49,7 +50,10 @@ public class CardService {
     String qrStatus = tokens.findByHealthProfileIdAndStatus(profile.getId(), QrTokenStatus.ACTIVE).stream().findFirst()
         .map(t -> t.getStatus().name())
         .orElse("MISSING");
-    return new CardResponse(cardId(profile), fullName, profile.getBloodType(), healthProfiles.completion(profile), qrStatus, profile.getUpdatedAt());
+    ItemResponse primary = healthProfiles.list(profile.getUser().getEmail(), "emergency-contacts").stream().filter(ItemResponse::critical).findFirst().orElse(null);
+    EmergencyContactResponse contact = primary == null ? null : new EmergencyContactResponse(primary.label(), primary.level(), primary.phone());
+    boolean hasProfilePhoto = profile.getProfilePhotoUrl() != null && !profile.getProfilePhotoUrl().isBlank();
+    return new CardResponse(profile.getCardNumber(), profile.getCardNumber(), fullName, null, profile.getBirthDate(), profile.getGender(), profile.getBloodType(), hasProfilePhoto, contact, healthProfiles.completion(profile), qrStatus, profile.getUpdatedAt());
   }
 
   @Transactional
@@ -153,10 +157,6 @@ public class CardService {
     return profile.getUser().getFirstName() + initial;
   }
 
-  private String cardId(HealthProfile profile) {
-    return "MBP-" + profile.getId().toString().replace("-", "").substring(0, 6).toUpperCase();
-  }
-
   private String hash(String value) {
     try {
       return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
@@ -165,7 +165,7 @@ public class CardService {
     }
   }
 
-  public record CardResponse(String cardId, String fullName, String bloodType, int profileCompletionPercentage, String qrStatus, Instant lastUpdatedAt) {}
+  public record CardResponse(String cardId, String cardNumber, String fullName, String identityDocumentNumber, LocalDate birthDate, String gender, String bloodType, boolean hasProfilePhoto, EmergencyContactResponse emergencyContact, int profileCompletionPercentage, String qrStatus, Instant lastUpdatedAt) {}
   public record QrTokenResponse(String emergencyUrl, Instant expiresAt, String status) {}
   public record CriticalAllergyResponse(String label, String severity) {}
   public record EmergencyContactResponse(String fullName, String relationship, String phone) {}

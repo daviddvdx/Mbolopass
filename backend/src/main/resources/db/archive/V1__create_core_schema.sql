@@ -18,6 +18,7 @@ create table if not exists health_profiles (
   user_id uuid unique not null references users(id) on delete cascade,
   birth_date date,
   blood_type varchar(20),
+  card_number varchar(32) unique not null,
   profile_photo_url varchar(500),
   emergency_notes varchar(1000),
   last_medical_visit_date date,

@@ -29,6 +29,11 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//, /^\/urgence\//, /^\/emergency\//],
         runtimeCaching: [
           {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+            handler: 'NetworkOnly',
+            options: { cacheName: 'mbolopass-api-never-cache' }
+          },
+          {
             urlPattern: ({ request, url }) => url.origin === self.location.origin && ['style', 'script', 'image', 'font'].includes(request.destination),
             handler: 'CacheFirst',
             options: {

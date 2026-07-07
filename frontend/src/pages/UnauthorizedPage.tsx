@@ -4,7 +4,7 @@ import { Card } from '../components/ui';
 
 export function UnauthorizedPage() {
   const location = useLocation();
-  const message = (location.state as { message?: string } | null)?.message ?? 'Votre role ne permet pas d acceder a cette page.';
+  const message = (location.state as { message?: string } | null)?.message ?? 'Cet espace est reserve aux professionnels de sante autorises.';
 
   return (
     <main className="auth-page">

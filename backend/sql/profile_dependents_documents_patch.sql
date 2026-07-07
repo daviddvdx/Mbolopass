@@ -112,3 +112,21 @@ create index if not exists idx_medical_documents_dependent_profile_id on medical
 create index if not exists idx_qr_tokens_dependent_profile_id on qr_tokens(dependent_profile_id);
 create index if not exists idx_qr_tokens_status_dependents on qr_tokens(status, dependent_profile_id);
 create index if not exists idx_emergency_logs_dependent_profile_id on emergency_access_logs(dependent_profile_id);
+
+alter table allergies add column if not exists created_at timestamptz;
+alter table allergies add column if not exists updated_at timestamptz;
+update allergies set created_at = coalesce(created_at, CURRENT_TIMESTAMP), updated_at = coalesce(updated_at, CURRENT_TIMESTAMP);
+alter table allergies alter column created_at set not null;
+alter table allergies alter column updated_at set not null;
+
+alter table medical_conditions add column if not exists created_at timestamptz;
+alter table medical_conditions add column if not exists updated_at timestamptz;
+update medical_conditions set created_at = coalesce(created_at, CURRENT_TIMESTAMP), updated_at = coalesce(updated_at, CURRENT_TIMESTAMP);
+alter table medical_conditions alter column created_at set not null;
+alter table medical_conditions alter column updated_at set not null;
+
+create index if not exists idx_allergies_health_profile_id_label on allergies(health_profile_id, lower(label));
+create index if not exists idx_medical_conditions_health_profile_id_label on medical_conditions(health_profile_id, lower(label));
+
+alter table health_profiles add column if not exists card_number varchar(32);
+create unique index if not exists ux_health_profiles_card_number on health_profiles(card_number) where card_number is not null;

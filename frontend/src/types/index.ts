@@ -1,4 +1,12 @@
-export type Role = 'PATIENT' | 'PROFESSIONAL' | 'ADMIN';
+export type Role = 'PATIENT' | 'HEALTH_PROFESSIONAL' | 'HEALTH_ADMIN';
+
+export type ProfessionalProfileIdentity = {
+  exists: boolean;
+  professionalType: string | null;
+  speciality: string | null;
+  verificationStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED' | string | null;
+  isApproved: boolean;
+};
 
 export type User = {
   id: string;
@@ -7,6 +15,7 @@ export type User = {
   email: string;
   role: Role;
   roles: string[];
+  professionalProfile: ProfessionalProfileIdentity | null;
 };
 
 export type RegisterRequest = {
@@ -30,6 +39,7 @@ export type AuthResponse = {
 
 export type Profile = {
   id: string;
+  cardNumber: string | null;
   birthDate: string | null;
   gender: string | null;
   bloodType: string | null;
@@ -52,6 +62,7 @@ export type UserProfile = {
   lastName: string;
   email: string;
   phone: string | null;
+  cardNumber: string | null;
   birthDate: string | null;
   gender: string | null;
   profilePhotoUrl: string | null;
@@ -97,8 +108,14 @@ export type Item = {
 
 export type CardInfo = {
   cardId: string;
+  cardNumber: string | null;
   fullName: string;
+  identityDocumentNumber: string | null;
+  birthDate: string | null;
+  gender: string | null;
   bloodType: string | null;
+  hasProfilePhoto: boolean;
+  emergencyContact: EmergencyContact | null;
   profileCompletionPercentage: number;
   qrStatus: 'ACTIVE' | 'MISSING' | string;
   lastUpdatedAt: string | null;
@@ -108,6 +125,14 @@ export type QrTokenResponse = {
   emergencyUrl: string;
   expiresAt: string | null;
   status: 'ACTIVE' | 'REVOKED' | 'EXPIRED' | string;
+};
+
+export type EmergencyQrResponse = {
+  cardNumber: string | null;
+  reference: string;
+  payload: string;
+  generatedAt: string | null;
+  version: number;
 };
 
 export type EmergencyAllergy = {
@@ -236,7 +261,7 @@ export type CreateAdminUserRequest = {
   lastName: string;
   email: string;
   password: string;
-  role: 'PATIENT' | 'PROFESSIONAL';
+  role: 'PATIENT' | 'HEALTH_PROFESSIONAL';
 };
 
 export type AdminQrCard = {

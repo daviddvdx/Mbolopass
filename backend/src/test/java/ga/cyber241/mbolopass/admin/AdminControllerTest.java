@@ -41,9 +41,9 @@ class AdminControllerTest {
 
   @Test
   void adminCanAccessDashboardButPatientAndProfessionalAreForbidden() throws Exception {
-    String admin = bearer(createUser(Role.ADMIN));
+    String admin = bearer(createUser(Role.HEALTH_ADMIN));
     String patient = bearer(createUser(Role.PATIENT));
-    String professional = bearer(createUser(Role.PROFESSIONAL));
+    String professional = bearer(createUser(Role.HEALTH_PROFESSIONAL));
 
     mockMvc.perform(get("/api/v1/admin/dashboard").header("Authorization", admin))
         .andExpect(status().isOk())
@@ -57,13 +57,14 @@ class AdminControllerTest {
 
   @Test
   void adminCreatesBlocksUnblocksUserAndAuditLogIsCreated() throws Exception {
-    String admin = bearer(createUser(Role.ADMIN));
+    String admin = bearer(createUser(Role.HEALTH_ADMIN));
     long before = auditLogs.count();
+    String professionalEmail = email();
 
     MvcResult created = mockMvc.perform(post("/api/v1/admin/users")
             .header("Authorization", admin)
             .contentType(MediaType.APPLICATION_JSON)
-            .content(json(Map.of("firstName", "Admin", "lastName", "Created", "email", email(), "password", "Password123!", "role", "PROFESSIONAL"))))
+            .content(json(Map.of("firstName", "Admin", "lastName", "Created", "email", professionalEmail, "password", "Password123!", "role", "HEALTH_PROFESSIONAL"))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.passwordHash").doesNotExist())
         .andReturn();
@@ -85,12 +86,25 @@ class AdminControllerTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.enabled").value(true));
 
+    MvcResult login = mockMvc.perform(post("/api/v1/auth/login")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("email", professionalEmail, "password", "Password123!"))))
+        .andExpect(status().isOk())
+        .andReturn();
+    String token = objectMapper.readTree(login.getResponse().getContentAsString()).get("accessToken").asText();
+    mockMvc.perform(get("/api/v1/auth/me").header("Authorization", "Bearer " + token))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.role").value("HEALTH_PROFESSIONAL"))
+        .andExpect(jsonPath("$.professionalProfile.exists").value(true))
+        .andExpect(jsonPath("$.professionalProfile.verificationStatus").value("APPROVED"))
+        .andExpect(jsonPath("$.professionalProfile.isApproved").value(true));
+
     assertThat(auditLogs.count()).isGreaterThanOrEqualTo(before + 3);
   }
 
   @Test
   void adminCannotBlockOwnAccount() throws Exception {
-    User adminUser = createUser(Role.ADMIN);
+    User adminUser = createUser(Role.HEALTH_ADMIN);
     String admin = bearer(adminUser);
 
     mockMvc.perform(patch("/api/v1/admin/users/" + adminUser.getId() + "/status")
@@ -102,7 +116,7 @@ class AdminControllerTest {
 
   @Test
   void adminRevokesQrAndNeverReceivesRawToken() throws Exception {
-    String admin = bearer(createUser(Role.ADMIN));
+    String admin = bearer(createUser(Role.HEALTH_ADMIN));
     User patient = createUser(Role.PATIENT);
     healthProfiles.ensureFor(patient);
     CardService.QrTokenResponse qr = cards.regenerate(patient.getEmail());

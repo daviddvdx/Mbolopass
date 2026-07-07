@@ -167,7 +167,7 @@ public class DependentService {
   public DependentProfile owned(String email, UUID dependentId) {
     User user = actor(email);
     DependentProfile dependent = dependents.findById(dependentId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Profil introuvable"));
-    if (user.getRole() != Role.ADMIN && !dependent.getGuardian().getId().equals(user.getId())) throw new ApiException(HttpStatus.FORBIDDEN, "Acces refuse");
+    if (user.getRole() != Role.HEALTH_ADMIN && !dependent.getGuardian().getId().equals(user.getId())) throw new ApiException(HttpStatus.FORBIDDEN, "Acces refuse");
     return dependent;
   }
 

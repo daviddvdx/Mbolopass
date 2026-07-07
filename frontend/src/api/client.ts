@@ -2,6 +2,7 @@ import type { ApiErrorBody } from '../types';
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080/api/v1';
 export const UNAUTHORIZED_EVENT = 'mbolopass:unauthorized';
+export const FORBIDDEN_EVENT = 'mbolopass:forbidden';
 
 let memoryAuthToken: string | null = null;
 
@@ -36,6 +37,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
 
   if (!response.ok) {
     if (response.status === 401 && token) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    if (response.status === 403 && token) window.dispatchEvent(new Event(FORBIDDEN_EVENT));
     const body = await response.json().catch(() => ({} as ApiErrorBody));
     throw new ApiError(body.message ?? 'Requete refusee', response.status);
   }

@@ -32,8 +32,13 @@ class PublicEmergencyControllerTest {
   @Test
   void publicEmergencyReturnsOnlyVitalAllowedFields() throws Exception {
     String email = email();
-    String bearer = bearer(register(email, "Amina", "N."));
+    JsonNode auth = register(email, "Amina", "N.");
+    String bearer = bearer(auth);
     prepareEmergencyProfile(bearer);
+    MvcResult card = mockMvc.perform(get("/api/v1/card/me").header("Authorization", bearer))
+        .andExpect(status().isOk())
+        .andReturn();
+    String cardNumber = objectMapper.readTree(card.getResponse().getContentAsString()).get("cardNumber").asText();
 
     String token = createToken(bearer);
     MvcResult result = mockMvc.perform(get("/api/v1/public/emergency/" + token))
@@ -49,7 +54,7 @@ class PublicEmergencyControllerTest {
         .andReturn();
 
     String body = result.getResponse().getContentAsString();
-    assertThat(body).doesNotContain(email, "password", "passwordHash", "birthDate", "token", "historique", "Allergie faible demo", "Condition historique demo", "Traitement non critique demo");
+    assertThat(body).doesNotContain(email, cardNumber, "password", "passwordHash", "birthDate", "token", "historique", "Allergie faible demo", "Condition historique demo", "Traitement non critique demo");
   }
 
   @Test

@@ -40,7 +40,7 @@ public class HealthProfileController {
   List<ItemResponse> list(Principal principal, @PathVariable String type) { return service.list(principal.getName(), type); }
 
   @PostMapping("/{type:allergies|conditions|medications|vaccinations|emergency-contacts}")
-  ItemResponse add(Principal principal, @PathVariable String type, @RequestBody ItemRequest request) { return service.add(principal.getName(), type, request); }
+  ItemResponse add(Principal principal, @PathVariable String type, @Valid @RequestBody ItemRequest request) { return service.add(principal.getName(), type, request); }
 
   @DeleteMapping("/{type:allergies|conditions|medications|vaccinations|emergency-contacts}/{id}")
   void delete(Principal principal, @PathVariable String type, @PathVariable UUID id) { service.delete(principal.getName(), type, id); }

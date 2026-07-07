@@ -49,6 +49,7 @@ class CardControllerTest {
     MvcResult ownerCard = mockMvc.perform(get("/api/v1/card/me").header("Authorization", bearer(owner)))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.cardId").exists())
+        .andExpect(jsonPath("$.cardNumber").value(org.hamcrest.Matchers.matchesPattern("MBP-\\d{4}-[A-HJ-KM-NP-Z2-9]{4}-[A-HJ-KM-NP-Z2-9]{4}")))
         .andExpect(jsonPath("$.fullName").value("Amina N."))
         .andExpect(jsonPath("$.bloodType").doesNotExist())
         .andExpect(jsonPath("$.profileCompletionPercentage").value(0))
@@ -111,14 +112,92 @@ class CardControllerTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.bloodType").value("O+"))
         .andExpect(jsonPath("$.fullName").value("Minimal D."))
+        .andExpect(jsonPath("$.birthDate").value("1990-01-01"))
         .andExpect(jsonPath("$.emergencyNotes").doesNotExist())
-        .andExpect(jsonPath("$.birthDate").doesNotExist())
         .andExpect(jsonPath("$.allergies").doesNotExist())
         .andExpect(jsonPath("$.criticalMedications").doesNotExist())
         .andReturn();
 
     assertThat(card.getResponse().getContentAsString())
         .doesNotContain("Notes urgence demo", "Allergie demo", "Traitement critique demo", auth.at("/user/email").asText());
+  }
+
+  @Test
+  void emergencyQrIsStableOfflinePayloadAndLimited() throws Exception {
+    JsonNode auth = register(email(), "Urgence", "Stable");
+    String bearer = bearer(auth);
+
+    mockMvc.perform(put("/api/v1/health-profile/me")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("bloodType", "AB+", "birthDate", "1985-04-03", "emergencyNotes", "Note privee a ne pas exposer"))))
+        .andExpect(status().isOk());
+    mockMvc.perform(put("/api/v1/profile/me")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("firstName", "Urgence", "lastName", "Stable", "phone", "+24106000001", "birthDate", "1985-04-03"))))
+        .andExpect(status().isOk());
+    postJson("/api/v1/health-profile/me/allergies", bearer, Map.of("label", "Penicilline", "level", "CRITICAL", "critical", true));
+    postJson("/api/v1/health-profile/me/conditions", bearer, Map.of("label", "Asthme", "level", "ACTIVE"));
+    postJson("/api/v1/health-profile/me/emergency-contacts", bearer, Map.of("label", "Contact famille", "level", "Famille", "phone", "+24100000000", "critical", true));
+
+    JsonNode first = getJson("/api/v1/cards/me/emergency-qr", bearer);
+    JsonNode second = getJson("/api/v1/cards/me/emergency-qr", bearer);
+    assertThat(first.get("payload").asText()).isEqualTo(second.get("payload").asText());
+    assertThat(first.get("reference").asText()).matches("EMG-[A-HJ-NP-Z2-9]{8}");
+    assertThat(first.get("version").asInt()).isEqualTo(1);
+
+    String payload = first.get("payload").asText();
+    assertThat(payload)
+        .contains("MBOLOPASS - INFORMATIONS D'URGENCE")
+        .contains("Carte: " + first.get("cardNumber").asText())
+        .contains("Reference: " + first.get("reference").asText())
+        .contains("Nom: Urgence Stable")
+        .contains("Date de naissance: 03/04/1985")
+        .contains("Telephone patient: +24106000001")
+        .contains("Groupe sanguin: AB+")
+        .contains("Allergies: Penicilline")
+        .contains("Pathologies: Asthme")
+        .contains("Urgence 1: Contact famille")
+        .contains("Tel 1: +24100000000")
+        .contains("Informations d'urgence uniquement.")
+        .contains("Le dossier medical complet reste protege.");
+    assertThat(payload).doesNotContain("Note privee a ne pas exposer", auth.at("/user/email").asText(), "password", "jwt", "token");
+  }
+
+  @Test
+  void emergencyQrRefreshKeepsReferenceAndUpdatesPayloadVersion() throws Exception {
+    JsonNode auth = register(email(), "Qr", "Guard");
+    String bearer = bearer(auth);
+    JsonNode first = getJson("/api/v1/cards/me/emergency-qr", bearer);
+    String originalReference = first.get("reference").asText();
+    String originalPayload = first.get("payload").asText();
+    assertThat(originalPayload).contains("Groupe sanguin: Non renseigne");
+
+    mockMvc.perform(put("/api/v1/health-profile/me")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("bloodType", "O+", "birthDate", "2001-07-06"))))
+        .andExpect(status().isOk());
+    mockMvc.perform(put("/api/v1/profile/me")
+            .header("Authorization", bearer)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(json(Map.of("firstName", "Qr", "lastName", "Guard", "phone", "+24107000002", "birthDate", "2001-07-06"))))
+        .andExpect(status().isOk());
+    postJson("/api/v1/health-profile/me/allergies", bearer, Map.of("label", "Latex", "level", "HIGH", "critical", true));
+
+    JsonNode unchanged = getJson("/api/v1/cards/me/emergency-qr", bearer);
+    assertThat(unchanged.get("payload").asText()).isEqualTo(originalPayload);
+
+    JsonNode refreshed = postJson("/api/v1/cards/me/emergency-qr/refresh", bearer, Map.of());
+    assertThat(refreshed.get("reference").asText()).isEqualTo(originalReference);
+    assertThat(refreshed.get("version").asInt()).isEqualTo(first.get("version").asInt() + 1);
+    assertThat(refreshed.get("payload").asText())
+        .isNotEqualTo(originalPayload)
+        .contains("Groupe sanguin: O+")
+        .contains("Telephone patient: +24107000002")
+        .contains("Allergies: Latex")
+        .contains("Date de naissance: 06/07/2001");
   }
 
   private JsonNode register(String email, String firstName, String lastName) throws Exception {
@@ -135,6 +214,13 @@ class CardControllerTest {
             .header("Authorization", bearer)
             .contentType(MediaType.APPLICATION_JSON)
             .content(json(body)))
+        .andExpect(status().isOk())
+        .andReturn();
+    return objectMapper.readTree(result.getResponse().getContentAsString());
+  }
+
+  private JsonNode getJson(String path, String bearer) throws Exception {
+    MvcResult result = mockMvc.perform(get(path).header("Authorization", bearer))
         .andExpect(status().isOk())
         .andReturn();
     return objectMapper.readTree(result.getResponse().getContentAsString());

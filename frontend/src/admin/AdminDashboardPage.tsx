@@ -4,10 +4,22 @@ import { useAuth } from '../auth/AuthContext';
 import { Card, LoadingState } from '../components/ui';
 
 export function AdminDashboardPage() {
-  const { token } = useAuth();
-  const dashboard = useQuery({ queryKey: ['admin-dashboard'], queryFn: () => getAdminDashboard(token!), enabled: Boolean(token) });
-  const logs = useQuery({ queryKey: ['admin-audit-recent'], queryFn: () => listAdminAuditLogs(token!, { page: 0, size: 5 }), enabled: Boolean(token) });
+  const { token, user, status } = useAuth();
+  const enabled = status === 'authenticated' && Boolean(token && user?.id);
+  const dashboard = useQuery({ queryKey: ['admin-dashboard', user?.id], queryFn: () => getAdminDashboard(token!), enabled });
+  const logs = useQuery({ queryKey: ['admin-audit-recent', user?.id], queryFn: () => listAdminAuditLogs(token!, { page: 0, size: 5 }), enabled });
   if (dashboard.isLoading) return <div className="page"><LoadingState /></div>;
+  if (dashboard.isError) {
+    return (
+      <div className="page">
+        <div className="page-heading"><p className="eyebrow">Administration</p><h1>Console MboloPass</h1></div>
+        <Card>
+          <h2>Donnees indisponibles</h2>
+          <p className="error">Le tableau de bord admin n'a pas pu recuperer les statistiques. Verifiez que votre compte possede le role HEALTH_ADMIN et que votre session est encore valide.</p>
+        </Card>
+      </div>
+    );
+  }
   const data = dashboard.data;
   return (
     <div className="page">

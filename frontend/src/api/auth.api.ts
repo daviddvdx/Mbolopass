@@ -12,3 +12,7 @@ export function login(payload: LoginRequest) {
 export function me(token: string) {
   return api<User>('/auth/me', { token });
 }
+
+export function logout(token?: string | null) {
+  return api<void>('/auth/logout', { method: 'POST', token });
+}
